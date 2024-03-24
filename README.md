@@ -5,7 +5,7 @@
 
 This SDK provides a set of utilities for working with Telegram stickers.
 
-- Auto resize image with don`t lose alpha channel.
+- Convert image formats without losing transparency.
 - Auto optimize output size for sticker, make it valid for Telegram.
 
 ## 🛠 Supported Pack Types
