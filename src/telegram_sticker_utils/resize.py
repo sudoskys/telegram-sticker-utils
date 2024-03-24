@@ -2,14 +2,16 @@ import os
 import pathlib
 import tempfile
 from io import BytesIO
-from typing import Literal, NewType, Tuple
+from typing import Literal, Tuple
 
 import ffmpy
 import pngquant
 from loguru import logger
 from PIL import Image
 
-from .custom import EXECUTABLE
+from .custom import FFMPEG_EXECUTABLE, PNGQUANT_EXECUTABLE
+
+pngquant.config(PNGQUANT_EXECUTABLE)
 
 
 class TelegramStickerUtils(object):
@@ -45,7 +47,7 @@ class TelegramStickerUtils(object):
         assert not (new_width == -1 and new_height == -1), "Both new width and new height cannot be -1"
         # 使用ffmpy调整GIF大小
         ff = ffmpy.FFmpeg(
-            executable=EXECUTABLE,
+            executable=FFMPEG_EXECUTABLE,
             inputs={
                 input_path: None
             },
@@ -76,7 +78,7 @@ class TelegramStickerUtils(object):
         scale = f'{new_width}:{new_height}'
         try:
             ff = ffmpy.FFmpeg(
-                executable=EXECUTABLE,
+                executable=FFMPEG_EXECUTABLE,
                 inputs={input_path: None},
                 outputs={output_path: f'-vf scale={scale} -y -loglevel 0'}
             )
@@ -145,7 +147,7 @@ class TelegramStickerUtils(object):
                         output_filename: f'-c:v libvpx-vp9 -b:v {br} -crf {crf} -cpu-used {cpu_used} -an -pix_fmt yuva420p -auto-alt-ref 0 -metadata:s:v:0 alpha_mode="1"'
                     }
                     ff = ffmpy.FFmpeg(
-                        executable=EXECUTABLE,
+                        executable=FFMPEG_EXECUTABLE,
                         inputs={input_path: f'-y -loglevel 0 -ss 00:00:0.0 -t {sec}'},
                         outputs=output
                     )

@@ -1,5 +1,9 @@
 import shutil
+
+import pngquant
+
 from .resize import TelegramStickerUtils
+from .custom import IGNORE_CHECKS
 
 
 def check_ffmpeg():
@@ -16,5 +20,6 @@ def check_pngquant():
         )
 
 
-check_ffmpeg()
-check_pngquant()
+if not IGNORE_CHECKS:
+    check_ffmpeg()
+    check_pngquant()
