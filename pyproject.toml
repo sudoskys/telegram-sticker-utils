@@ -3,7 +3,7 @@ name = "telegram-sticker-utils"
 version = "0.1.0"
 description = "easy and fast processing of telegram stickers"
 authors = [
-    {name = "sudoskys", email = "coldlando@hotmail.com"},
+    { name = "sudoskys", email = "coldlando@hotmail.com" },
 ]
 dependencies = [
     "ffmpy>=0.3.2",
@@ -13,7 +13,7 @@ dependencies = [
 ]
 requires-python = ">=3.8"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = { text = "Apache-2.0" }
 
 [build-system]
 requires = ["pdm-backend"]
