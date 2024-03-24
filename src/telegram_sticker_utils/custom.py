@@ -1,0 +1,2 @@
+# executable='ffmpeg'
+EXECUTABLE = 'ffmpeg'
