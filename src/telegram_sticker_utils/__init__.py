@@ -198,20 +198,43 @@ class ImageProcessor(object):
             new_width: int,
             new_height: int = -1
     ) -> bytes:
+        """
+        Convert image or video data to optimized WEBM format, resizing as necessary.
+
+        :param input_data: Path to the input file or the input file data.
+        :param new_width: Desired width for the output video.
+        :param new_height: Desired height for the output video, if -1 maintain aspect ratio.
+        :return: Bytes of the optimized WEBM file.
+        :raises FileNotFoundError: If the input file does not exist.
+        """
+        # Load input data
         if isinstance(input_data, (str, os.PathLike)):
             input_path = pathlib.Path(input_data)
-            assert input_path.exists(), FileNotFoundError(f"Input file {input_path} does not exist")
+            if not input_path.exists():
+                raise FileNotFoundError(f"Input file {input_path} does not exist")
             with open(input_path, 'rb') as file:
                 input_data = file.read()
+
         with w_image.Image(blob=input_data) as img:
-            img.transform(resize=f"{new_width}x{new_height}") if new_height > 0 else img.transform(
-                resize=f"{new_width}")
+            # Adjust new height to maintain aspect ratio if needed
+            if new_height <= 0:
+                ratio = new_width / img.width
+                new_height = int(img.height * ratio)
+
+            # Resize image/video
+            img.transform(resize=f"{new_width}x{new_height}")
+
             # Apply the optimizations
             img.optimize_layers()
             img.color_fuzz = "10%"
             img.optimize_transparency()
-            # Convert to WEBM
-            img.options['webm:cq'] = '30'  # Optimize for quality, change value as needed (0-63)
+
+            # Convert to WEBM with quality optimizations
+            img.options['webm:lossy'] = 'true'  # Use lossy compression for smaller size
+            img.options['webm:method'] = '6'  # Method 6 provides good quality and compression
+            # img.options['webm:cpu-used'] = '4'  # Trade-off between quality and speed
+            # img.options['webm:autoconvert'] = 'false'  # Disable automatic format conversion to keep control
+
             img.format = 'webm'
             optimized_blob = BytesIO()
             img.save(file=optimized_blob)
