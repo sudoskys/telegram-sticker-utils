@@ -3,13 +3,15 @@
 [![PyPI version](https://badge.fury.io/py/telegram-sticker-utils.svg)](https://badge.fury.io/py/telegram-sticker-utils)
 [![Downloads](https://pepy.tech/badge/telegram-sticker-utils)](https://pepy.tech/project/telegram-sticker-utils)
 
-Telegram Sticker [CLI](https://github.com/sudoskys/tsticker)
+If you are not a developer, you can use the Telegram Sticker [CLI](https://github.com/sudoskys/tsticker) (developed by
+this SDK) for
+user-friendly operations.
 
 This SDK provides a set of utilities for working with Telegram stickers.
 
 - Convert image formats without losing transparency.
 - Auto optimize output size for sticker, make it valid for Telegram.
-- Auto detect sticker type and emojis.
+- Auto-detect sticker type and emojis.
 
 ## 🛠 Supported Pack Types
 
