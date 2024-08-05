@@ -1,20 +1,21 @@
 [project]
 name = "telegram-sticker-utils"
-version = "0.1.0"
+version = "0.2.0"
 description = "easy and fast processing of telegram stickers"
 authors = [
     { name = "sudoskys", email = "coldlando@hotmail.com" },
 ]
 dependencies = [
-    "ffmpy>=0.3.2",
     "loguru>=0.7.2",
-    "Pillow>=10.2.0",
-    "pngquant>=1.0.7",
+    "Wand>=0.6.13",
+    "Pillow>=10.4.0",
+    "ffmpy>=0.3.2",
+    "emoji>=2.12.1",
 ]
 requires-python = ">=3.8"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-keywords = ["telegram", "sticker", "image", "video", "processing", "ffmpeg", "pillow", "pngquant"]
+keywords = ["telegram", "sticker", "image", "video", "processing", "ffmpeg", "pillow"]
 
 [project.urls]
 Repository = "https://github.com/sudoskys/telegram-sticker-utils"
