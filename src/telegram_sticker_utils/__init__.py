@@ -1,5 +1,6 @@
 import os
 import pathlib
+from dataclasses import dataclass
 from io import BytesIO
 from typing import Literal, Tuple
 from typing import Union, IO
@@ -11,25 +12,25 @@ from telegram_sticker_utils.core.const import get_random_emoji_from_text
 
 
 def is_animated_gif(
-        image_path: Union[str, bytes, os.PathLike, IO[bytes]]
+        image: Union[str, bytes, os.PathLike, IO[bytes]]
 ) -> bool:
     """
     Check if an image is an animated GIF.
-    :param image_path: Path to the image file or a file-like object.
+    :param image: Path to the image file or a file-like object.
     :return: True if the image is an animated GIF, False otherwise.
     :raises ValueError: If the image is not a valid GIF file.
     """
     # Load the image data
-    if isinstance(image_path, (str, os.PathLike)):
-        image_path = pathlib.Path(image_path)
+    if isinstance(image, (str, os.PathLike)):
+        image_path = pathlib.Path(image)
         if not image_path.exists():
             raise FileNotFoundError(f"Input file {image_path} does not exist")
         with open(image_path, 'rb') as f:
             image_data = f.read()
-    elif isinstance(image_path, IO):
-        image_data = image_path.read()
-    elif isinstance(image_path, bytes):
-        image_data = image_path
+    elif isinstance(image, IO):
+        image_data = image.read()
+    elif isinstance(image, bytes):
+        image_data = image
     else:
         raise TypeError("image_path must be a string, bytes, os.PathLike, or file-like object")
 
@@ -54,6 +55,14 @@ def is_animated_gif(
         pass  # PIL is not available
 
     raise ValueError("Unable to process the image file. Ensure the file is a valid GIF.")
+
+
+@dataclass
+class Sticker:
+    data: bytes
+    file_extension: str
+    emojis: list[str]
+    sticker_type: Union[Literal["static", "video"], str]
 
 
 class ImageProcessor(object):
@@ -269,7 +278,7 @@ class ImageProcessor(object):
             *,
             scale: int = 512,
             master_edge: Literal["width", "height"] = "width"
-    ) -> Tuple[BytesIO, str, list[str]]:
+    ) -> Sticker:
         """
         Process the image. If the image is animated, convert it to WebM.
         If the image is static, resize it to the specified dimensions.
@@ -290,4 +299,10 @@ class ImageProcessor(object):
             input_data = input_data.read()
         sticker_data, sticker_type = ImageProcessor.make_raw_sticker(input_data, scale=scale, master_edge=master_edge)
         emoji_item = [get_random_emoji_from_text(input_name)]
-        return BytesIO(sticker_data), sticker_type, emoji_item
+        file_extension = "png" if sticker_type == "static" else "webm"
+        return Sticker(
+            data=sticker_data,
+            file_extension=file_extension,
+            emojis=emoji_item,
+            sticker_type=sticker_type
+        )
