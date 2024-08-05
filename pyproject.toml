@@ -8,7 +8,7 @@ authors = [
 dependencies = [
     "loguru>=0.7.2",
     "Wand>=0.6.13",
-    "Pillow>=10.4.0",
+    "Pillow>=6.2.0",
     "ffmpy>=0.3.2",
     "emoji>=2.12.1",
 ]
