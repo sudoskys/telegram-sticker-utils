@@ -1,32 +1,47 @@
-from pathlib import Path
+import os
+import pathlib
+from typing import Union, IO
 
-from telegram_sticker_utils import TelegramStickerUtils
+from wand.image import Image
 
-OUTPUT_DIR = Path(__file__).parent.joinpath("output")
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-utils = TelegramStickerUtils()
-GIF512 = Path(__file__).parent / "512_ori.gif"
-bytes_io, suffix = utils.make_video_sticker(str(GIF512.absolute()), scale=512, master_edge="width")
-assert suffix == ".webm", "Suffix should be .webm"
-with OUTPUT_DIR.joinpath(GIF512.stem + suffix).open("wb") as f:
-    f.write(bytes_io.getvalue())
+def resize_gif(
+        input_data: Union[str, bytes, os.PathLike, IO[bytes]],
+        new_width: int,
+        new_height: int = -1
+) -> bytes:
+    """
+    Resize a GIF file using wand.
 
-GIF300 = Path(__file__).parent / "300_ori.gif"
-bytes_io, suffix = utils.make_video_sticker(str(GIF300.absolute()), scale=512, master_edge="width")
-assert suffix == ".webm", "Suffix should be .webm"
-with OUTPUT_DIR.joinpath(GIF300.stem + suffix).open("wb") as f:
-    f.write(bytes_io.getvalue())
+    :param input_data: Path to the input GIF file or binary data.
+    :param new_width: New width of the GIF file.
+    :param new_height: New height of the GIF file. Default is -1.
+    :return: Resized GIF as binary data.
+    """
+    if isinstance(input_data, (str, os.PathLike)):
+        input_path = pathlib.Path(input_data)
+        assert input_path.exists(), FileNotFoundError(f"Input file {input_path} does not exist")
+        with open(input_path, 'rb') as f:
+            input_data = f.read()
 
-PNG512 = Path(__file__).parent / "512_ori.png"
-bytes_io, suffix = utils.make_static_sticker(str(PNG512.absolute()), scale=512, master_edge="width")
-assert suffix == ".png", "Suffix should be .png"
-with OUTPUT_DIR.joinpath(PNG512.stem + suffix).open("wb") as f:
-    f.write(bytes_io.getvalue())
+    assert isinstance(input_data, (bytes, IO)), f"Invalid input_data type: {type(input_data)}"
+    assert isinstance(new_width, int) and new_width >= -1, f"Invalid new width {new_width}"
+    assert isinstance(new_height, int) and new_height >= -1, f"Invalid new height {new_height}"
+    assert not (new_width == -1 and new_height == -1), "Both new width and new height cannot be -1"
 
-PNG300 = Path(__file__).parent / "300_ori.png"
+    # 使用 wand 来调整 GIF 大小
+    with Image(blob=input_data) as img:
+        original_width, original_height = img.width, img.height
+        if new_height == -1:
+            new_height = int((new_width / original_width) * original_height)
+        elif new_width == -1:
+            new_width = int((new_height / original_height) * original_width)
+        img.resize(new_width, new_height)
+        resized_gif_data = img.make_blob(format='gif')
+    assert resized_gif_data and len(resized_gif_data) > 0, "Failed to resize GIF"
+    return resized_gif_data
 
-bytes_io, suffix = utils.make_static_sticker(str(PNG300.absolute()), scale=512, master_edge="width")
-assert suffix == ".png", "Suffix should be .png"
-with OUTPUT_DIR.joinpath(PNG300.stem + suffix).open("wb") as f:
-    f.write(bytes_io.getvalue())
+
+bytes_out = resize_gif("300_ori.gif", 500)
+with open("300_resized.gif", 'wb') as f:
+    f.write(bytes_out)
