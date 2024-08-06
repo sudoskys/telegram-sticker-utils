@@ -265,18 +265,18 @@ class ImageProcessor(object):
 
             # Resize image/video
             img.transform(resize=f"{new_width}x{new_height}")
-
             # Apply the optimizations
-            img.optimize_layers()
-            img.color_fuzz = "10%"
-            img.optimize_transparency()
+            # img.color_fuzz = "10%"
+            # img.optimize_transparency()
 
             # Convert to WEBM with quality optimizations
-            img.options['webm:lossy'] = 'true'  # Use lossy compression for smaller size
+            # img.options['webm:lossy'] = 'true'  # Use lossy compression for smaller size
             img.options['webm:method'] = '6'  # Method 6 provides good quality and compression
             # img.options['webm:cpu-used'] = '4'  # Trade-off between quality and speed
             # img.options['webm:autoconvert'] = 'false'  # Disable automatic format conversion to keep control
-
+            # Ensure the size is still correct after optimizations
+            if img.width != new_width or img.height != new_height:
+                raise RuntimeError("Sticker Dimensions changed after optimization")
             img.format = 'webm'
             optimized_blob = BytesIO()
             img.save(file=optimized_blob)

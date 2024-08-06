@@ -2,7 +2,7 @@ from telegram_sticker_utils import ImageProcessor
 
 sticker = ImageProcessor.make_sticker(
     input_name='sad',
-    input_data=open("300_ori.gif", 'rb').read(),
+    input_data=open("冲锋.gif", 'rb').read(),
     scale=512,
     master_edge='width',
 )
