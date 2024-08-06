@@ -129,6 +129,48 @@ class ImageProcessor(object):
         return resized_image_data
 
     @staticmethod
+    def resize_image_with_scale(
+            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
+            scale: int,
+            output_format: str = 'png'
+    ) -> bytes:
+        """
+        Resize an image file using wand and ensure the longest side does not exceed the given scale.
+
+        :param input_data: Path to the input image file or binary data.
+        :param scale: Maximum length of the longest side of the image file.
+        :param output_format: Output image format. Supported formats: 'gif', 'png'.
+        :return: Resized image as binary data.
+        """
+        if scale <= 0:
+            raise ValueError(f"Invalid scale value: {scale}. Scale must be positive.")
+
+        if isinstance(input_data, (str, os.PathLike)):
+            input_path = pathlib.Path(input_data)
+            if not input_path.exists():
+                raise FileNotFoundError(f"Input file {input_path} does not exist")
+            with open(input_path, 'rb') as f:
+                input_data = f.read()
+
+        if isinstance(input_data, IO):
+            input_data = input_data.read()
+
+        if not isinstance(input_data, bytes):
+            raise TypeError(f"Invalid input_data type: {type(input_data)}")
+
+        with w_image.Image(blob=input_data) as img:
+            original_width, original_height = img.width, img.height
+
+            if original_width > original_height:
+                new_width = scale
+                new_height = -1
+            else:
+                new_height = scale
+                new_width = -1
+
+        return ImageProcessor.resize_image(input_data, new_width, new_height, output_format)
+
+    @staticmethod
     def _optimize_png(png_data: bytes) -> bytes:
         """
         Optimize PNG image to ensure its size is under 500kb.
@@ -153,16 +195,16 @@ class ImageProcessor(object):
 
     @staticmethod
     def convert_gif_to_png(
-            input_data: Union[str, bytes, os.PathLike, IO[bytes]], new_width: int,
-            new_height: int = -1
+            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
+            scale: int
     ) -> bytes:
         """
         Convert a GIF file to a PNG file.
 
         :param input_data: Path to the input GIF file or binary data.
-        :param new_width: New width of the PNG file.
-        :param new_height: New height of the PNG file, -1 to auto calculate based on width.
+        :param scale: The desired maximum size for the longest side of the PNG file.
         :return: PNG file in binary form.
+        :raises FileNotFoundError: If the input file does not exist.
         """
         if isinstance(input_data, (str, os.PathLike)):
             input_path = pathlib.Path(input_data)
@@ -177,14 +219,13 @@ class ImageProcessor(object):
             original_width = img.width
             original_height = img.height
 
-            # Adjust -1 to match the other dimension ratio
-            if new_width == -1 and new_height == -1:
-                raise ValueError("Both new width and new height cannot be -1")
-
-            if new_width == -1:
-                new_width = int(original_width * new_height / original_height)
-            if new_height == -1:
-                new_height = int(original_height * new_width / original_width)
+            # Compute the new size while maintaining aspect ratio
+            if original_width > original_height:
+                new_width = scale
+                new_height = int(original_height * (scale / original_width))
+            else:
+                new_height = scale
+                new_width = int(original_width * (scale / original_height))
 
             # Resize image
             img.resize(new_width, new_height)
@@ -195,15 +236,13 @@ class ImageProcessor(object):
     @staticmethod
     def convert_to_webm(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            new_width: int,
-            new_height: int = -1
+            scale: int
     ) -> bytes:
         """
         Convert image or video data to optimized WEBM format, resizing as necessary.
 
         :param input_data: Path to the input file or the input file data.
-        :param new_width: Desired width for the output video.
-        :param new_height: Desired height for the output video, if -1 maintain aspect ratio.
+        :param scale: Desired maximum size for the longest side of the output video.
         :return: Bytes of the optimized WEBM file.
         :raises FileNotFoundError: If the input file does not exist.
         """
@@ -216,10 +255,13 @@ class ImageProcessor(object):
                 input_data = file.read()
 
         with w_image.Image(blob=input_data) as img:
-            # Adjust new height to maintain aspect ratio if needed
-            if new_height <= 0:
-                ratio = new_width / img.width
-                new_height = int(img.height * ratio)
+            # Compute the new size while maintaining aspect ratio
+            if img.width > img.height:
+                new_width = scale
+                new_height = int(img.height * (scale / img.width))
+            else:
+                new_height = scale
+                new_width = int(img.width * (scale / img.height))
 
             # Resize image/video
             img.transform(resize=f"{new_width}x{new_height}")
@@ -270,27 +312,21 @@ class ImageProcessor(object):
             if img.animation:
                 # Convert to webm if image is animated
                 if master_edge == "width":
-                    new_height = int(img.height * (scale / img.width))
-                    return ImageProcessor.convert_to_webm(input_data, new_width=scale, new_height=new_height), "video"
+                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
                 else:
-                    new_width = int(img.width * (scale / img.height))
-                    return ImageProcessor.convert_to_webm(input_data, new_width=new_width, new_height=scale), "video"
+                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
             else:
                 # Convert to PNG if image is static
                 if master_edge == "width":
-                    new_height = int(img.height * (scale / img.width))
-                    return ImageProcessor.resize_image(
+                    return ImageProcessor.resize_image_with_scale(
                         input_data,
-                        new_width=scale,
-                        new_height=new_height,
+                        scale=scale,
                         output_format='png'
                     ), "static"
                 else:
-                    new_width = int(img.width * (scale / img.height))
-                    return ImageProcessor.resize_image(
+                    return ImageProcessor.resize_image_with_scale(
                         input_data,
-                        new_width=new_width,
-                        new_height=scale,
+                        scale=scale,
                         output_format='png'
                     ), "static"
 
