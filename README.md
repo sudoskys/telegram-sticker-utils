@@ -21,11 +21,12 @@ This SDK provides a set of utilities for working with Telegram stickers.
 
 ## 🚀 Installation
 
-You need install [ImageMagick](https://github.com/imagemagick/imagemagick) before using this SDK.
+You need install **[ImageMagick](https://github.com/imagemagick/imagemagick)** and **ffmpeg** before using this SDK.
 
 Install Guide: https://docs.wand-py.org/en/0.6.12/guide/install.html
 
 ```shell
+apt install ffmpeg
 pip3 install telegram-sticker-utils
 ```
 
