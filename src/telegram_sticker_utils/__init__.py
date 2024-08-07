@@ -272,7 +272,7 @@ class ImageProcessor(object):
             output_options = [
                 '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
                 '-vf', f"scale={scale}:-1",  # Merge scale and fps into one filter
-                '-t', '3',  # Duration
+                '-t', '2',  # Duration
                 '-an',  # No audio stream
                 '-loop', '1',  # Loop the video
                 '-deadline', 'realtime',  # Speed/quality tradeoff setting
