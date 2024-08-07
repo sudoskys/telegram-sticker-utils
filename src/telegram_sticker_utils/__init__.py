@@ -1,11 +1,13 @@
 import os
 import pathlib
+import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Literal, Tuple
 from typing import Union, IO
 
 import wand.image as w_image
+from ffmpy import FFmpeg
 from loguru import logger
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
@@ -234,7 +236,7 @@ class ImageProcessor(object):
             return img.make_blob()
 
     @staticmethod
-    def convert_to_webm(
+    def convert_to_webm_ffmpeg(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             scale: int
     ) -> bytes:
@@ -245,6 +247,69 @@ class ImageProcessor(object):
         :param scale: Desired maximum size for the longest side of the output video.
         :return: Bytes of the optimized WEBM file.
         :raises FileNotFoundError: If the input file does not exist.
+        """
+        # Create a temporary directory to hold the files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = None
+
+            # Save input data to a temporary file if it is not already a path
+            if isinstance(input_data, (str, os.PathLike)):
+                input_path = pathlib.Path(input_data)
+                if not input_path.exists():
+                    raise FileNotFoundError(f"Input file {input_path} does not exist")
+            else:
+                with tempfile.NamedTemporaryFile(dir=temp_dir, delete=False) as temp_input_file:
+                    temp_input_file.write(input_data)
+                    input_path = temp_input_file.name
+
+            # Define temporary output file path
+            output_path = os.path.join(temp_dir, "output.webm")
+
+            # Run ffmpeg to resize and convert
+            ff = FFmpeg(
+                inputs={input_path: None},
+                outputs={output_path: [
+                    '-vf', f'scale=iw*min({scale}/iw\\,{scale}/ih):ih*min({scale}/iw\\,{scale}/ih)',  # Scaling
+                    '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
+                    '-r', '30',  # Frame rate
+                    '-t', '3',  # Duration
+                    '-an',  # No audio stream
+                    '-loop', '1',  # Loop the video
+                    '-deadline', 'realtime',  # Speed/quality tradeoff setting
+                    '-cpu-used', '0',  # Default encoding speed/quality tradeoff
+                    '-b:v', '1M',  # Bitrate, adjusted as needed to keep file size small
+                    '-v', 'error',  # Silence ffmpeg output
+                ]}
+            )
+
+            logger.debug(f"Running ffmpeg command: {ff.cmd}")
+            ff.run()
+
+            # Read the resulting optimized WEBM file
+            with open(output_path, 'rb') as output_file:
+                optimized_webm = output_file.read()
+
+                # Ensure the size does not exceed 256 KB
+                if len(optimized_webm) > 256 * 1024:
+                    raise ValueError("Encoded video exceeds 256 KB size limit")
+
+            return optimized_webm
+
+    @staticmethod
+    def convert_to_webm(
+            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
+            scale: int,
+            strict: bool = False
+    ) -> bytes:
+        """
+        Convert image or video data to optimized WEBM format, resizing as necessary.
+
+        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
+        :param input_data: Path to the input file or the input file data.
+        :param scale: Desired maximum size for the longest side of the output video.
+        :return: Bytes of the optimized WEBM file.
+        :raises FileNotFoundError: If the input file does not exist.
+        :raises ValueError: If the image dimensions change after optimization.
         """
         # Load input data
         if isinstance(input_data, (str, os.PathLike)):
@@ -276,19 +341,25 @@ class ImageProcessor(object):
             # img.options['webm:autoconvert'] = 'false'  # Disable automatic format conversion to keep control
             # Ensure the size is still correct after optimizations
             if img.width != new_width or img.height != new_height:
-                raise RuntimeError("Sticker Dimensions changed after optimization")
+                if not strict:
+                    return ImageProcessor.convert_to_webm_ffmpeg(input_data, scale)
+                raise ValueError(f"Sticker Dimensions changed after optimization {img.width}x{img.height}")
             img.format = 'webm'
             optimized_blob = BytesIO()
             img.save(file=optimized_blob)
             optimized_blob.seek(0)
-            return optimized_blob.read()
+            sticker_data = optimized_blob.read()
+            if len(sticker_data) > 256 * 1024:
+                raise ValueError("Encoded video exceeds 256 KB size limit")
+            return sticker_data
 
     @staticmethod
     def make_raw_sticker(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             *,
             scale: int = 512,
-            master_edge: Literal["width", "height"] = "width"
+            master_edge: Literal["width", "height"] = "width",
+            strict: bool = False
     ) -> Tuple[bytes, str]:
         """
         Process the image. If the image is animated, convert it to WebM.
@@ -297,6 +368,7 @@ class ImageProcessor(object):
         :param input_data: Path to the input image file or binary data.
         :param scale: New size of the image file.
         :param master_edge: Which dimension (width or height) to scale
+        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
         :return: Processed image as binary data.
         """
         if isinstance(input_data, (str, os.PathLike)):
@@ -312,9 +384,9 @@ class ImageProcessor(object):
             if img.animation:
                 # Convert to webm if image is animated
                 if master_edge == "width":
-                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
+                    return ImageProcessor.convert_to_webm(input_data, scale=scale, strict=strict), "video"
                 else:
-                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
+                    return ImageProcessor.convert_to_webm(input_data, scale=scale, strict=strict), "video"
             else:
                 # Convert to PNG if image is static
                 if master_edge == "width":
@@ -336,7 +408,8 @@ class ImageProcessor(object):
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             *,
             scale: int = 512,
-            master_edge: Literal["width", "height"] = "width"
+            master_edge: Literal["width", "height"] = "width",
+            strict: bool = False
     ) -> Sticker:
         """
         Process the image. If the image is animated, convert it to WebM.
@@ -346,6 +419,7 @@ class ImageProcessor(object):
         :param input_data: Path to the input image file or binary data.
         :param scale: New size of the image file.
         :param master_edge: Which dimension (width or height) to scale
+        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
         :return: Processed image as binary data.
         """
         if isinstance(input_data, (str, os.PathLike)):
@@ -356,7 +430,12 @@ class ImageProcessor(object):
                 input_data = f.read()
         elif isinstance(input_data, IO):
             input_data = input_data.read()
-        sticker_data, sticker_type = ImageProcessor.make_raw_sticker(input_data, scale=scale, master_edge=master_edge)
+        sticker_data, sticker_type = ImageProcessor.make_raw_sticker(
+            input_data,
+            scale=scale,
+            master_edge=master_edge,
+            strict=strict
+        )
         emoji_item = [get_random_emoji_from_text(input_name)]
         file_extension = "png" if sticker_type == "static" else "webm"
         return Sticker(
