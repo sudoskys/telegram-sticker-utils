@@ -239,16 +239,19 @@ class ImageProcessor(object):
     @staticmethod
     def convert_to_webm_ffmpeg(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            scale: int
+            scale: int,
+            *,
+            frame_rate: Union[int, None] = None
     ) -> bytes:
         """
         Convert image or video data to optimized WEBM format, resizing as necessary.
 
         :param input_data: Path to the input file or the input file data.
         :param scale: Desired maximum size for the longest side of the output video.
+        :param frame_rate: Desired frame rate of the output video. If None, frame rate is not adjusted.
         :return: Bytes of the optimized WEBM file.
         :raises FileNotFoundError: If the input file does not exist.
-        :raises ValueError: If the encoded video exceeds 256 KB size limit
+        :raises ValueError: If the encoded video exceeds 256 KB size limit.
         """
         # Create a temporary directory to hold the files
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -265,21 +268,24 @@ class ImageProcessor(object):
             # Define temporary output file path
             output_path = os.path.join(temp_dir, "output.webm")
 
-            # Run ffmpeg to resize and convert
+            # Create ffmpeg command
+            output_options = [
+                '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
+                '-vf', f"scale={scale}:-1",  # Merge scale and fps into one filter
+                '-t', '3',  # Duration
+                '-an',  # No audio stream
+                '-loop', '1',  # Loop the video
+                '-deadline', 'realtime',  # Speed/quality tradeoff setting
+                '-b:v', '1M',  # Bitrate, adjusted as needed to keep file size small
+                '-v', 'error',  # Silence ffmpeg output
+            ]
+
+            if frame_rate is not None:
+                output_options.extend(['-r', str(frame_rate)])  # FPS setting
+
             ff = FFmpeg(
                 inputs={input_path: None},
-                outputs={output_path: [
-                    '-vf', f'"scale={scale}:-1"\'',
-                    '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
-                    '-filter:v', 'fps=30',  # Ensure frame rate does not exceed 30 fps
-                    '-t', '3',  # Duration
-                    '-an',  # No audio stream
-                    '-loop', '1',  # Loop the video
-                    '-deadline', 'realtime',  # Speed/quality tradeoff setting
-                    '-cpu-used', '0',  # Default encoding speed/quality tradeoff
-                    '-b:v', '1M',  # Bitrate, adjusted as needed to keep file size small
-                    '-v', 'error',  # Silence ffmpeg output
-                ]}
+                outputs={output_path: output_options}
             )
             logger.debug(f"Calling ffmpeg command: {ff.cmd}")
             ff.run()
@@ -290,6 +296,7 @@ class ImageProcessor(object):
 
                 # Ensure the size does not exceed 256 KB
                 if len(optimized_webm) > 256 * 1024:
+                    logger.warning("Encoded video exceeds 256 KB size limit")
                     raise ValueError("Encoded video exceeds 256 KB size limit")
 
             return optimized_webm
@@ -359,7 +366,7 @@ class ImageProcessor(object):
             optimized_blob.seek(0)
             sticker_data = optimized_blob.read()
             if len(sticker_data) > 256 * 1024:
-                raise ValueError("Encoded video exceeds 256 KB size limit")
+                logger.warning("Encoded video exceeds 256 KB size limit")
             return sticker_data
 
     @staticmethod
