@@ -1,6 +1,6 @@
 [project]
 name = "telegram-sticker-utils"
-version = "0.2.5"
+version = "0.2.6"
 description = "easy and fast processing of telegram stickers"
 authors = [
     { name = "sudoskys", email = "coldlando@hotmail.com" },
@@ -11,8 +11,10 @@ dependencies = [
     "Pillow>=6.2.0",
     "ffmpy>=0.3.2",
     "emoji>=2.12.1",
+    "setuptools>=60.0.0",
+    "moviepy>=1.0.3",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 keywords = ["telegram", "sticker", "image", "video", "processing", "ffmpeg", "pillow"]
