@@ -7,6 +7,7 @@ from typing import Literal, Tuple
 from typing import Union, IO
 
 import wand.image as w_image
+from PIL import Image as PilImage
 from ffmpy import FFmpeg
 from loguru import logger
 
@@ -250,8 +251,6 @@ class ImageProcessor(object):
         """
         # Create a temporary directory to hold the files
         with tempfile.TemporaryDirectory() as temp_dir:
-            input_path = None
-
             # Save input data to a temporary file if it is not already a path
             if isinstance(input_data, (str, os.PathLike)):
                 input_path = pathlib.Path(input_data)
@@ -271,7 +270,7 @@ class ImageProcessor(object):
                 outputs={output_path: [
                     '-vf', f'scale=iw*min({scale}/iw\\,{scale}/ih):ih*min({scale}/iw\\,{scale}/ih)',  # Scaling
                     '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
-                    '-r', '30',  # Frame rate
+                    '-filter:v', 'fps=30',  # Ensure frame rate does not exceed 30 fps
                     '-t', '3',  # Duration
                     '-an',  # No audio stream
                     '-loop', '1',  # Loop the video
@@ -281,8 +280,7 @@ class ImageProcessor(object):
                     '-v', 'error',  # Silence ffmpeg output
                 ]}
             )
-
-            logger.debug(f"Running ffmpeg command: {ff.cmd}")
+            logger.debug(f"Calling ffmpeg command: {ff.cmd}")
             ff.run()
 
             # Read the resulting optimized WEBM file
@@ -299,14 +297,15 @@ class ImageProcessor(object):
     def convert_to_webm(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             scale: int,
-            strict: bool = False
+            *,
+            strict: bool = True
     ) -> bytes:
         """
         Convert image or video data to optimized WEBM format, resizing as necessary.
 
-        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
         :param input_data: Path to the input file or the input file data.
         :param scale: Desired maximum size for the longest side of the output video.
+        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
         :return: Bytes of the optimized WEBM file.
         :raises FileNotFoundError: If the input file does not exist.
         :raises ValueError: If the image dimensions change after optimization.
@@ -328,8 +327,20 @@ class ImageProcessor(object):
                 new_height = scale
                 new_width = int(img.width * (scale / img.height))
 
+            if img.format == "GIF":
+                # Use Pillow to get the image dimensions
+                with BytesIO(input_data) as img_byte_io:
+                    pil_image = PilImage.open(img_byte_io)
+                    pil_width, pil_height = pil_image.size
+                    pil_image.close()
+                    # Check if dimensions match between wand and Pillow
+                if (img.width, img.height) != (pil_width, pil_height):
+                    if strict:
+                        # Use ffmpeg for conversion if dimensions do not match
+                        return ImageProcessor.convert_to_webm_ffmpeg(input_data, scale)
+                    raise ValueError(f"Image dimensions unknown error occurred")
             # Resize image/video
-            img.transform(resize=f"{new_width}x{new_height}")
+            img.transform(resize=f"{new_width}x{new_height}!")
             # Apply the optimizations
             # img.color_fuzz = "10%"
             # img.optimize_transparency()
@@ -337,13 +348,10 @@ class ImageProcessor(object):
             # Convert to WEBM with quality optimizations
             # img.options['webm:lossy'] = 'true'  # Use lossy compression for smaller size
             img.options['webm:method'] = '6'  # Method 6 provides good quality and compression
-            # img.options['webm:cpu-used'] = '4'  # Trade-off between quality and speed
-            # img.options['webm:autoconvert'] = 'false'  # Disable automatic format conversion to keep control
-            # Ensure the size is still correct after optimizations
+
             if img.width != new_width or img.height != new_height:
-                if not strict:
-                    return ImageProcessor.convert_to_webm_ffmpeg(input_data, scale)
                 raise ValueError(f"Sticker Dimensions changed after optimization {img.width}x{img.height}")
+
             img.format = 'webm'
             optimized_blob = BytesIO()
             img.save(file=optimized_blob)
@@ -359,7 +367,7 @@ class ImageProcessor(object):
             *,
             scale: int = 512,
             master_edge: Literal["width", "height"] = "width",
-            strict: bool = False
+            strict: bool = True
     ) -> Tuple[bytes, str]:
         """
         Process the image. If the image is animated, convert it to WebM.
@@ -383,10 +391,14 @@ class ImageProcessor(object):
         with w_image.Image(blob=input_data) as img:
             if img.animation:
                 # Convert to webm if image is animated
-                if master_edge == "width":
-                    return ImageProcessor.convert_to_webm(input_data, scale=scale, strict=strict), "video"
+                if strict:
+                    try:
+                        return ImageProcessor.convert_to_webm_ffmpeg(input_data=input_data, scale=scale), "video"
+                    except Exception as exc:
+                        logger.error(f"ffmpeg error {exc}, using wand")
+                        return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
                 else:
-                    return ImageProcessor.convert_to_webm(input_data, scale=scale, strict=strict), "video"
+                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
             else:
                 # Convert to PNG if image is static
                 if master_edge == "width":
@@ -409,7 +421,7 @@ class ImageProcessor(object):
             *,
             scale: int = 512,
             master_edge: Literal["width", "height"] = "width",
-            strict: bool = False
+            strict: bool = True
     ) -> Sticker:
         """
         Process the image. If the image is animated, convert it to WebM.
