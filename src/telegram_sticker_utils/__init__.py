@@ -248,6 +248,7 @@ class ImageProcessor(object):
         :param scale: Desired maximum size for the longest side of the output video.
         :return: Bytes of the optimized WEBM file.
         :raises FileNotFoundError: If the input file does not exist.
+        :raises ValueError: If the encoded video exceeds 256 KB size limit
         """
         # Create a temporary directory to hold the files
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -268,7 +269,7 @@ class ImageProcessor(object):
             ff = FFmpeg(
                 inputs={input_path: None},
                 outputs={output_path: [
-                    '-vf', f'scale=iw*min({scale}/iw\\,{scale}/ih):ih*min({scale}/iw\\,{scale}/ih)',  # Scaling
+                    '-vf', f'"scale={scale}:-1"\'',
                     '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
                     '-filter:v', 'fps=30',  # Ensure frame rate does not exceed 30 fps
                     '-t', '3',  # Duration
