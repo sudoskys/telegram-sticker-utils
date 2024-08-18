@@ -43,8 +43,7 @@ for sticker_file in ["happy.webp", "sad.png", "高兴.jpg", "悲伤.gif"]:
     sticker = ImageProcessor.make_sticker(
         input_name=sticker_file,
         input_data=open(sticker_file, 'rb').read(),
-        scale=512,
-        master_edge='width',
+        scale=512
     )
     print(sticker.sticker_type)
     print(sticker.emojis)
