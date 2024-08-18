@@ -261,7 +261,7 @@ class ImageProcessor(object):
                 return ImageProcessor._resize_static_image(input_data, scale)
         except Exception as exc:
             logger.warning(f"Unsupported file type: {file_type}")
-            raise ValueError(
+            raise BadInput(
                 f"An Error happened!Unsupported file type @{file_type}."
                 f"If you believe this is an error, please report it at "
                 f"https://github.com/sudoskys/telegram-sticker-utils/issues/new"
