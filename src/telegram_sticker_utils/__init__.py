@@ -2,17 +2,36 @@ import os
 import pathlib
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from io import BytesIO
-from typing import Literal, Tuple
+from typing import Literal
 from typing import Union, IO
 
 import wand.image as w_image
 from PIL import Image as PilImage
 from ffmpy import FFmpeg
 from loguru import logger
+from magika import Magika
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
+
+
+class BadInput(Exception):
+    pass
+
+
+class StickerType(Enum):
+    STATIC = "static"
+    VIDEO = "video"
+
+
+@dataclass
+class Sticker:
+    data: bytes
+    file_extension: str
+    emojis: list[str]
+    sticker_type: Union[Literal["static", "video"], str, StickerType]
 
 
 def is_animated_gif(
@@ -61,18 +80,49 @@ def is_animated_gif(
     raise ValueError("Unable to process the image file. Ensure the file is a valid GIF.")
 
 
-@dataclass
-class Sticker:
-    data: bytes
-    file_extension: str
-    emojis: list[str]
-    sticker_type: Union[Literal["static", "video"], str]
-
-
 class ImageProcessor(object):
+    mimetype_detector = Magika()
 
     @staticmethod
-    def resize_image(
+    def _read_input_data(input_data: Union[str, bytes, os.PathLike, IO[bytes]]) -> bytes:
+        """Helper function to read input data from different formats."""
+        if isinstance(input_data, (str, os.PathLike)):
+            input_path = pathlib.Path(input_data)
+            if not input_path.exists():
+                raise FileNotFoundError(f"Input file {input_path} does not exist")
+            with open(input_path, 'rb') as f:
+                return f.read()
+        elif isinstance(input_data, IO):
+            return input_data.read()
+        if not isinstance(input_data, bytes):
+            raise TypeError(f"Invalid input_data type: {type(input_data)}")
+        return input_data
+
+    @staticmethod
+    def _optimize_png(png_data: bytes) -> bytes:
+        """
+        Optimize PNG image to ensure its size is under 500kb.
+
+        :param png_data: PNG image data.
+        :return: Optimized PNG image data.
+        """
+        target_size = 500 * 1024  # 500kb in bytes
+        quality = 100  # Start with the highest quality
+
+        while len(png_data) > target_size and quality > 10:
+            with w_image.Image(blob=png_data) as img:
+                img.compression_quality = quality
+                png_data = img.make_blob(format='png')
+
+            quality -= 5  # Reduce quality stepwise
+
+        if len(png_data) > target_size:
+            raise RuntimeError("Failed to optimize PNG to be under 500kb")
+
+        return png_data
+
+    @staticmethod
+    def _resize_image(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             new_width: int,
             new_height: int = -1,
@@ -146,69 +196,93 @@ class ImageProcessor(object):
         :param output_format: Output image format. Supported formats: 'gif', 'png'.
         :return: Resized image as binary data.
         """
-        if scale <= 0:
-            raise ValueError(f"Invalid scale value: {scale}. Scale must be positive.")
-
-        if isinstance(input_data, (str, os.PathLike)):
-            input_path = pathlib.Path(input_data)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file {input_path} does not exist")
-            with open(input_path, 'rb') as f:
-                input_data = f.read()
-
-        if isinstance(input_data, IO):
-            input_data = input_data.read()
-
-        if not isinstance(input_data, bytes):
-            raise TypeError(f"Invalid input_data type: {type(input_data)}")
-
+        input_data = ImageProcessor._read_input_data(input_data)
         with w_image.Image(blob=input_data) as img:
             original_width, original_height = img.width, img.height
-
             if original_width > original_height:
                 new_width = scale
                 new_height = -1
             else:
                 new_height = scale
                 new_width = -1
-
-        return ImageProcessor.resize_image(input_data, new_width, new_height, output_format)
-
-    @staticmethod
-    def _optimize_png(png_data: bytes) -> bytes:
-        """
-        Optimize PNG image to ensure its size is under 500kb.
-
-        :param png_data: PNG image data.
-        :return: Optimized PNG image data.
-        """
-        target_size = 500 * 1024  # 500kb in bytes
-        quality = 100  # Start with the highest quality
-
-        while len(png_data) > target_size and quality > 10:
-            with w_image.Image(blob=png_data) as img:
-                img.compression_quality = quality
-                png_data = img.make_blob(format='png')
-
-            quality -= 5  # Reduce quality stepwise
-
-        if len(png_data) > target_size:
-            raise RuntimeError("Failed to optimize PNG to be under 500kb")
-
-        return png_data
+        return ImageProcessor._resize_image(input_data, new_width, new_height, output_format)
 
     @staticmethod
-    def convert_gif_to_png(
+    def _process_animated_image(input_data: bytes, scale: int) -> tuple[bytes, StickerType]:
+        """Helper function to process animated images."""
+        try:
+            return WebmHelper.convert_to_webm_ffmpeg(input_data=input_data,
+                                                     scale=scale), StickerType.VIDEO
+        except Exception as exc:
+            logger.error(f"ffmpeg error {exc}, using wand")
+            return WebmHelper.convert_to_webm_wand(input_data, scale=scale), StickerType.VIDEO
+
+    @staticmethod
+    def _resize_static_image(input_data: bytes, scale: int) -> tuple[bytes, StickerType]:
+        """Helper function to resize static images."""
+        return ImageProcessor.resize_image_with_scale(
+            input_data,
+            scale=scale,
+            output_format='png'
+        ), StickerType.STATIC
+
+    @staticmethod
+    def make_raw_sticker(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            scale: int
-    ) -> bytes:
+            *,
+            scale: int = 512
+    ) -> tuple[bytes, StickerType]:
         """
-        Convert a GIF file to a PNG file.
+        Process the image. If the image is animated, convert it to WebM.
+        If the image is static, resize it to the specified dimensions.
 
-        :param input_data: Path to the input GIF file or binary data.
-        :param scale: The desired maximum size for the longest side of the PNG file.
-        :return: PNG file in binary form.
-        :raises FileNotFoundError: If the input file does not exist.
+        :param input_data: Path to the input image file or binary data.
+        :param scale: New size of the image file.
+        :return: Processed image as binary data.
+        """
+        input_data = ImageProcessor._read_input_data(input_data)
+        file_type = ImageProcessor.mimetype_detector.identify_bytes(input_data).output.ct_label
+
+        if file_type in ["webm", "gif"]:
+            if file_type == "webm":
+                return ImageProcessor._process_animated_image(input_data, scale)
+            with w_image.Image(blob=input_data) as img:
+                if img.animation:
+                    return ImageProcessor._process_animated_image(input_data, scale)
+                return ImageProcessor._resize_static_image(input_data, scale)
+
+        if file_type in ["png", "jpeg", "jpg"]:
+            return ImageProcessor._resize_static_image(input_data, scale)
+
+        try:
+            with w_image.Image(blob=input_data) as img:
+                if img.animation:
+                    return ImageProcessor._process_animated_image(input_data, scale)
+                return ImageProcessor._resize_static_image(input_data, scale)
+        except Exception as exc:
+            logger.warning(f"Unsupported file type: {file_type}")
+            raise ValueError(
+                f"An Error happened!Unsupported file type @{file_type}."
+                f"If you believe this is an error, please report it at "
+                f"https://github.com/sudoskys/telegram-sticker-utils/issues/new"
+            ) from exc
+
+    @staticmethod
+    def make_sticker(
+            input_name: str,
+            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
+            *,
+            scale: int = 512,
+            **kwargs
+    ) -> Sticker:
+        """
+        Process the image. If the image is animated, convert it to WebM.
+        If the image is static, resize it to the specified dimensions.
+
+        :param input_name: Name of the input image file.
+        :param input_data: Path to the input image file or binary data.
+        :param scale: New size of the image file.
+        :return: Processed image as binary data.
         """
         if isinstance(input_data, (str, os.PathLike)):
             input_path = pathlib.Path(input_data)
@@ -219,24 +293,24 @@ class ImageProcessor(object):
         elif isinstance(input_data, IO):
             input_data = input_data.read()
 
-        with w_image.Image(blob=input_data) as img:
-            original_width = img.width
-            original_height = img.height
+        # Process the image
+        sticker_data, sticker_type = ImageProcessor.make_raw_sticker(
+            input_data,
+            scale=scale
+        )
+        # Get random emoji from the input name
+        emoji_item = [get_random_emoji_from_text(input_name)]
+        # Output file extension
+        file_extension = "png" if sticker_type == "static" else "webm"
+        return Sticker(
+            data=sticker_data,
+            file_extension=file_extension,
+            emojis=emoji_item,
+            sticker_type=sticker_type
+        )
 
-            # Compute the new size while maintaining aspect ratio
-            if original_width > original_height:
-                new_width = scale
-                new_height = int(original_height * (scale / original_width))
-            else:
-                new_height = scale
-                new_width = int(original_width * (scale / original_height))
 
-            # Resize image
-            img.resize(new_width, new_height)
-            img.format = 'png'
-
-            return img.make_blob()
-
+class WebmHelper(object):
     @staticmethod
     def convert_to_webm_ffmpeg(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
@@ -315,12 +389,16 @@ class ImageProcessor(object):
 
             # Ensure the size does not exceed 256 KB
             if len(optimized_webm) > 256 * 1024:
-                logger.warning("Encoded video exceeds 256 KB size limit")
+                raise BadInput(
+                    "Encoded video exceeds 256 KB size limit"
+                    "But Telegram thinks it's too big!"
+                    "Please check this file."
+                )
 
             return optimized_webm
 
     @staticmethod
-    def convert_to_webm(
+    def convert_to_webm_wand(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             scale: int,
             *,
@@ -328,6 +406,7 @@ class ImageProcessor(object):
     ) -> bytes:
         """
         Convert image or video data to optimized WEBM format, resizing as necessary.
+        !!!Warning: This method may cause the GIF size to be distorted!!!
 
         :param input_data: Path to the input file or the input file data.
         :param scale: Desired maximum size for the longest side of the output video.
@@ -363,7 +442,7 @@ class ImageProcessor(object):
                 if (img.width, img.height) != (pil_width, pil_height):
                     if strict:
                         # Use ffmpeg for conversion if dimensions do not match
-                        return ImageProcessor.convert_to_webm_ffmpeg(input_data, scale)
+                        return WebmHelper.convert_to_webm_ffmpeg(input_data, scale)
                     raise ValueError(f"Image dimensions unknown error occurred")
             # Resize image/video
             img.transform(resize=f"{new_width}x{new_height}!")
@@ -384,101 +463,9 @@ class ImageProcessor(object):
             optimized_blob.seek(0)
             sticker_data = optimized_blob.read()
             if len(sticker_data) > 256 * 1024:
-                logger.warning("Encoded video exceeds 256 KB size limit")
+                raise BadInput(
+                    "Encoded video exceeds 256 KB size limit"
+                    "But Telegram thinks it's too big!"
+                    "Please check this file."
+                )
             return sticker_data
-
-    @staticmethod
-    def make_raw_sticker(
-            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            *,
-            scale: int = 512,
-            master_edge: Literal["width", "height"] = "width",
-            strict: bool = True
-    ) -> Tuple[bytes, str]:
-        """
-        Process the image. If the image is animated, convert it to WebM.
-        If the image is static, resize it to the specified dimensions.
-
-        :param input_data: Path to the input image file or binary data.
-        :param scale: New size of the image file.
-        :param master_edge: Which dimension (width or height) to scale
-        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
-        :return: Processed image as binary data.
-        """
-        if isinstance(input_data, (str, os.PathLike)):
-            input_path = pathlib.Path(input_data)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file {input_path} does not exist")
-            with open(input_path, 'rb') as f:
-                input_data = f.read()
-        elif isinstance(input_data, IO):
-            input_data = input_data.read()
-
-        with w_image.Image(blob=input_data) as img:
-            if img.animation:
-                # Convert to webm if image is animated
-                if strict:
-                    try:
-                        return ImageProcessor.convert_to_webm_ffmpeg(input_data=input_data, scale=scale), "video"
-                    except Exception as exc:
-                        logger.error(f"ffmpeg error {exc}, using wand")
-                        return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
-                else:
-                    return ImageProcessor.convert_to_webm(input_data, scale=scale), "video"
-            else:
-                # Convert to PNG if image is static
-                if master_edge == "width":
-                    return ImageProcessor.resize_image_with_scale(
-                        input_data,
-                        scale=scale,
-                        output_format='png'
-                    ), "static"
-                else:
-                    return ImageProcessor.resize_image_with_scale(
-                        input_data,
-                        scale=scale,
-                        output_format='png'
-                    ), "static"
-
-    @staticmethod
-    def make_sticker(
-            input_name: str,
-            input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            *,
-            scale: int = 512,
-            master_edge: Literal["width", "height"] = "width",
-            strict: bool = True
-    ) -> Sticker:
-        """
-        Process the image. If the image is animated, convert it to WebM.
-        If the image is static, resize it to the specified dimensions.
-
-        :param input_name: Name of the input image file.
-        :param input_data: Path to the input image file or binary data.
-        :param scale: New size of the image file.
-        :param master_edge: Which dimension (width or height) to scale
-        :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
-        :return: Processed image as binary data.
-        """
-        if isinstance(input_data, (str, os.PathLike)):
-            input_path = pathlib.Path(input_data)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file {input_path} does not exist")
-            with open(input_path, 'rb') as f:
-                input_data = f.read()
-        elif isinstance(input_data, IO):
-            input_data = input_data.read()
-        sticker_data, sticker_type = ImageProcessor.make_raw_sticker(
-            input_data,
-            scale=scale,
-            master_edge=master_edge,
-            strict=strict
-        )
-        emoji_item = [get_random_emoji_from_text(input_name)]
-        file_extension = "png" if sticker_type == "static" else "webm"
-        return Sticker(
-            data=sticker_data,
-            file_extension=file_extension,
-            emojis=emoji_item,
-            sticker_type=sticker_type
-        )
