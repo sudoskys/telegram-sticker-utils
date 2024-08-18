@@ -31,7 +31,7 @@ class Sticker:
     data: bytes
     file_extension: str
     emojis: list[str]
-    sticker_type: Union[Literal["static", "video"], str, StickerType]
+    sticker_type: Union[Literal["static", "video"], str]
 
 
 def is_animated_gif(
@@ -306,7 +306,7 @@ class ImageProcessor(object):
             data=sticker_data,
             file_extension=file_extension,
             emojis=emoji_item,
-            sticker_type=sticker_type
+            sticker_type=sticker_type.value
         )
 
 
