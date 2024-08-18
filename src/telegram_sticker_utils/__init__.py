@@ -329,7 +329,7 @@ class WebmHelper(object):
             with open(input_temp_path, 'wb') as temp_input_file:
                 temp_input_file.write(webm_data)
 
-            crf_values = [30, 40, 45, 50]  # Increasing compression levels
+            crf_values = [30, 40, 45, 50, 55, 60]
             while len(webm_data) > WebmHelper.MAX_SIZE and crf_values:
                 crf = crf_values.pop(0)
                 WebmHelper.process_video(
