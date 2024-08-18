@@ -311,6 +311,67 @@ class ImageProcessor(object):
 
 
 class WebmHelper(object):
+    MAX_SIZE = 256 * 1024  # 256 KB
+
+    @staticmethod
+    def _optimize_webm(
+            webm_data: bytes,
+            scale: int
+    ) -> bytes:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Try different compression levels if necessary
+            input_temp_path = os.path.join(temp_dir, "current_input.webm")
+            output_temp_path = os.path.join(temp_dir, "current_output.webm")
+            # If the initial webm data is already under 256 KB, return it
+            if len(webm_data) <= WebmHelper.MAX_SIZE:
+                return webm_data
+            # Write the initial webm data to a file
+            with open(input_temp_path, 'wb') as temp_input_file:
+                temp_input_file.write(webm_data)
+
+            crf_values = [30, 40, 45, 50]  # Increasing compression levels
+            while len(webm_data) > WebmHelper.MAX_SIZE and crf_values:
+                crf = crf_values.pop(0)
+                WebmHelper.process_video(
+                    input_temp_path,
+                    output_temp_path,
+                    scale=scale,
+                    crf=crf
+                )
+                with open(output_temp_path, 'rb') as output_file:
+                    webm_data = output_file.read()
+        if len(webm_data) > WebmHelper.MAX_SIZE:
+            raise BadInput("Encoded video exceeds 256 KB size limit even after optimization")
+        return webm_data
+
+    @staticmethod
+    def process_video(input_path, output_path, scale, frame_rate=None, duration=None, crf=None):
+        output_options = [
+            '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
+            '-vf', f"scale={scale}:-1",  # Scaling
+            '-an',  # No audio stream
+            '-loop', '1',  # Loop the video
+            '-deadline', 'realtime',  # Speed/quality tradeoff setting
+            '-b:v', '1M',  # Bitrate
+            '-v', 'error',  # Silence ffmpeg output
+        ]
+
+        if frame_rate is not None:
+            output_options.extend(['-r', str(frame_rate)])  # FPS setting
+
+        if duration is not None:
+            output_options.extend(['-t', str(duration)])  # Duration setting
+
+        if crf is not None:
+            output_options.extend(['-crf', str(crf)])  # Constant Rate Factor
+
+        ff = FFmpeg(
+            inputs={input_path: None},
+            outputs={output_path: output_options}
+        )
+        logger.debug(f"Calling ffmpeg command: {ff.cmd}")
+        ff.run()
+
     @staticmethod
     def convert_to_webm_ffmpeg(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
@@ -331,30 +392,6 @@ class WebmHelper(object):
         :raises ValueError: If the encoded video exceeds 256 KB size limit.
         """
 
-        def process_video(_input_path, _output_path, _scale, _frame_rate=None, _duration=None):
-            output_options = [
-                '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
-                '-vf', f"scale={_scale}:-1",  # Scaling
-                '-an',  # No audio stream
-                '-loop', '1',  # Loop the video
-                '-deadline', 'realtime',  # Speed/quality tradeoff setting
-                '-b:v', '1M',  # Bitrate
-                '-v', 'error',  # Silence ffmpeg output
-            ]
-
-            if _frame_rate is not None:
-                output_options.extend(['-r', str(_frame_rate)])  # FPS setting
-
-            if _duration is not None:
-                output_options.extend(['-t', str(_duration)])
-
-            ff = FFmpeg(
-                inputs={_input_path: None},
-                outputs={_output_path: output_options}
-            )
-            logger.debug(f"Calling ffmpeg command: {ff.cmd}")
-            ff.run()
-
         # Create a temporary directory to hold the files
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save input data to a temporary file if it is not already a path
@@ -367,9 +404,9 @@ class WebmHelper(object):
                     temp_input_file.write(input_data)
                     input_path = temp_input_file.name
 
-            # Initial temporary output file path
+            # Process video and optimize
             output_path = os.path.join(temp_dir, "output_initial.webm")
-            process_video(input_path, output_path, scale, frame_rate, duration)
+            WebmHelper.process_video(input_path, output_path, scale, frame_rate, duration)
 
             with open(output_path, 'rb') as output_file:
                 optimized_webm = output_file.read()
@@ -382,10 +419,16 @@ class WebmHelper(object):
                 frame_rate = 24 if video.fps > 30 else frame_rate
                 duration = 2 if video.duration > 3 else duration
                 logger.debug("Reprocessing video to fit requirements")
-                process_video(input_path, adjusted_output_path, scale, frame_rate, duration)
+                WebmHelper.process_video(input_path, adjusted_output_path, scale, frame_rate, duration)
 
                 with open(adjusted_output_path, 'rb') as output_file:
                     optimized_webm = output_file.read()
+
+            # Optimize the WEBM file to be under 256 KB
+            optimized_webm = WebmHelper._optimize_webm(
+                optimized_webm,
+                scale=scale
+            )
 
             # Ensure the size does not exceed 256 KB
             if len(optimized_webm) > 256 * 1024:
@@ -394,7 +437,6 @@ class WebmHelper(object):
                     "But Telegram thinks it's too big!"
                     "Please check this file."
                 )
-
             return optimized_webm
 
     @staticmethod
