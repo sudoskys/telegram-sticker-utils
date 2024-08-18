@@ -16,6 +16,8 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
 
+mimetype_detector = Magika()
+
 
 class BadInput(Exception):
     pass
@@ -81,7 +83,6 @@ def is_animated_gif(
 
 
 class ImageProcessor(object):
-    mimetype_detector = Magika()
 
     @staticmethod
     def _read_input_data(input_data: Union[str, bytes, os.PathLike, IO[bytes]]) -> bytes:
@@ -211,8 +212,7 @@ class ImageProcessor(object):
     def _process_animated_image(input_data: bytes, scale: int) -> tuple[bytes, StickerType]:
         """Helper function to process animated images."""
         try:
-            return WebmHelper.convert_to_webm_ffmpeg(input_data=input_data,
-                                                     scale=scale), StickerType.VIDEO
+            return WebmHelper.convert_to_webm_ffmpeg(input_data=input_data, scale=scale), StickerType.VIDEO
         except Exception as exc:
             logger.error(f"ffmpeg error {exc}, using wand")
             return WebmHelper.convert_to_webm_wand(input_data, scale=scale), StickerType.VIDEO
@@ -241,7 +241,7 @@ class ImageProcessor(object):
         :return: Processed image as binary data.
         """
         input_data = ImageProcessor._read_input_data(input_data)
-        file_type = ImageProcessor.mimetype_detector.identify_bytes(input_data).output.ct_label
+        file_type = mimetype_detector.identify_bytes(input_data).output.ct_label
         if file_type == "webm":
             return ImageProcessor._process_animated_image(input_data, scale)
 
@@ -316,7 +316,8 @@ class WebmHelper(object):
     @staticmethod
     def _optimize_webm(
             webm_data: bytes,
-            scale: int
+            scale: int,
+            origin_file_type: str
     ) -> bytes:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Try different compression levels if necessary
@@ -336,7 +337,8 @@ class WebmHelper(object):
                     input_temp_path,
                     output_temp_path,
                     scale=scale,
-                    crf=crf
+                    crf=crf,
+                    file_type=origin_file_type
                 )
                 with open(output_temp_path, 'rb') as output_file:
                     webm_data = output_file.read()
@@ -345,9 +347,10 @@ class WebmHelper(object):
         return webm_data
 
     @staticmethod
-    def process_video(input_path, output_path, scale, frame_rate=None, duration=None, crf=None):
+    def process_video(input_path, output_path, scale, file_type: str, frame_rate=None, duration=None, crf=None):
         output_options = [
             '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
+            # '-pix_fmt', 'yuva420p',  # Pixel format
             '-vf', f"scale={scale}:-1",  # Scaling
             '-an',  # No audio stream
             '-loop', '1',  # Loop the video
@@ -355,7 +358,12 @@ class WebmHelper(object):
             '-b:v', '1M',  # Bitrate
             '-v', 'error',  # Silence ffmpeg output
         ]
-
+        if file_type == "webm":
+            input_options = [
+                '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
+            ]
+        else:
+            input_options = []
         if frame_rate is not None:
             output_options.extend(['-r', str(frame_rate)])  # FPS setting
 
@@ -366,7 +374,8 @@ class WebmHelper(object):
             output_options.extend(['-crf', str(crf)])  # Constant Rate Factor
 
         ff = FFmpeg(
-            inputs={input_path: None},
+            global_options=['-y'],  # Overwrite output file if it exists
+            inputs={input_path: input_options},
             outputs={output_path: output_options}
         )
         logger.debug(f"Calling ffmpeg command: {ff.cmd}")
@@ -391,7 +400,10 @@ class WebmHelper(object):
         :raises FileNotFoundError: If the input file does not exist.
         :raises ValueError: If the encoded video exceeds 256 KB size limit.
         """
-
+        try:
+            file_type = mimetype_detector.identify_bytes(input_data).output.ct_label
+        except Exception as exc:
+            raise BadInput("Failed to infer file type") from exc
         # Create a temporary directory to hold the files
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save input data to a temporary file if it is not already a path
@@ -406,7 +418,14 @@ class WebmHelper(object):
 
             # Process video and optimize
             output_path = os.path.join(temp_dir, "output_initial.webm")
-            WebmHelper.process_video(input_path, output_path, scale, frame_rate, duration)
+            WebmHelper.process_video(
+                input_path=input_path,
+                output_path=output_path,
+                scale=scale,
+                file_type=file_type,
+                frame_rate=frame_rate,
+                duration=duration
+            )
 
             with open(output_path, 'rb') as output_file:
                 optimized_webm = output_file.read()
@@ -419,15 +438,22 @@ class WebmHelper(object):
                 frame_rate = 24 if video.fps > 30 else frame_rate
                 duration = 2 if video.duration > 3 else duration
                 logger.debug("Reprocessing video to fit requirements")
-                WebmHelper.process_video(input_path, adjusted_output_path, scale, frame_rate, duration)
-
+                WebmHelper.process_video(
+                    input_path=input_path,
+                    output_path=output_path,
+                    scale=scale,
+                    file_type=file_type,
+                    frame_rate=frame_rate,
+                    duration=duration
+                )
                 with open(adjusted_output_path, 'rb') as output_file:
                     optimized_webm = output_file.read()
 
             # Optimize the WEBM file to be under 256 KB
             optimized_webm = WebmHelper._optimize_webm(
                 optimized_webm,
-                scale=scale
+                scale=scale,
+                origin_file_type=file_type
             )
 
             # Ensure the size does not exceed 256 KB
