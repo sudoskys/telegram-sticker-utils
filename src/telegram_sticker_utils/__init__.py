@@ -440,12 +440,14 @@ class WebmHelper(object):
                 logger.debug("Reprocessing video to fit requirements")
                 WebmHelper.process_video(
                     input_path=input_path,
-                    output_path=output_path,
+                    output_path=adjusted_output_path,
                     scale=scale,
                     file_type=file_type,
                     frame_rate=frame_rate,
                     duration=duration
                 )
+                if not os.path.exists(adjusted_output_path):
+                    raise FileNotFoundError("Failed to create adjusted video")
                 with open(adjusted_output_path, 'rb') as output_file:
                     optimized_webm = output_file.read()
 
