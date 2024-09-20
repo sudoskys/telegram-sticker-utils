@@ -378,7 +378,7 @@ class WebmHelper(object):
             inputs={input_path: input_options},
             outputs={output_path: output_options}
         )
-        logger.debug(f"Calling ffmpeg command: {ff.cmd}")
+        logger.trace(f"Calling ffmpeg command: {ff.cmd}")
         ff.run()
 
     @staticmethod
@@ -437,7 +437,7 @@ class WebmHelper(object):
                 adjusted_output_path = os.path.join(temp_dir, "output_adjusted.webm")
                 frame_rate = 24 if video.fps > 30 else frame_rate
                 duration = 2 if video.duration > 3 else duration
-                logger.debug("Reprocessing video to fit requirements")
+                logger.trace("Reprocessing video to fit requirements")
                 WebmHelper.process_video(
                     input_path=input_path,
                     output_path=adjusted_output_path,
