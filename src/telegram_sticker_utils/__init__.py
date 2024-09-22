@@ -214,7 +214,7 @@ class ImageProcessor(object):
         try:
             return WebmHelper.convert_to_webm_ffmpeg(input_data=input_data, scale=scale), StickerType.VIDEO
         except Exception as exc:
-            logger.error(f"ffmpeg error {exc}, using wand")
+            logger.error(f"ffmpeg report error {exc}\ntry to using wand instead")
             return WebmHelper.convert_to_webm_wand(input_data, scale=scale), StickerType.VIDEO
 
     @staticmethod
@@ -461,9 +461,9 @@ class WebmHelper(object):
             # Ensure the size does not exceed 256 KB
             if len(optimized_webm) > 256 * 1024:
                 raise BadInput(
-                    "Encoded video exceeds 256 KB size limit"
-                    "But Telegram thinks it's too big!"
-                    "Please check this file."
+                    "Encoded video exceeds 256 KB size limit when using ffmpeg, "
+                    "but Telegram thinks it's too big! "
+                    "Please check this file"
                 )
             return optimized_webm
 
@@ -534,8 +534,8 @@ class WebmHelper(object):
             sticker_data = optimized_blob.read()
             if len(sticker_data) > 256 * 1024:
                 raise BadInput(
-                    "Encoded video exceeds 256 KB size limit"
-                    "But Telegram thinks it's too big!"
-                    "Please check this file."
+                    "Encoded video exceeds 256 KB size limit when using wind, "
+                    "but Telegram thinks it's too big! "
+                    "Please check this file"
                 )
             return sticker_data
