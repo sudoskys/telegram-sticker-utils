@@ -317,7 +317,6 @@ class WebmHelper(object):
     def _optimize_webm(
             webm_data: bytes,
             scale: int,
-            origin_file_type: str
     ) -> bytes:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Try different compression levels if necessary
@@ -338,7 +337,7 @@ class WebmHelper(object):
                     output_temp_path,
                     scale=scale,
                     crf=crf,
-                    file_type=origin_file_type
+                    input_file_type="webm"
                 )
                 with open(output_temp_path, 'rb') as output_file:
                     webm_data = output_file.read()
@@ -347,18 +346,32 @@ class WebmHelper(object):
         return webm_data
 
     @staticmethod
-    def process_video(input_path, output_path, scale, file_type: str, frame_rate=None, duration=None, crf=None):
+    def process_video(input_path, output_path, scale, input_file_type: str, frame_rate=None, duration=None, crf=None):
+        """
+        https://core.telegram.org/stickers/webm-vp9-encoding
+        Process video using ffmpeg.
+        :param input_path:  Path to the input video file.
+        :param output_path: Path to the output video file.
+        :param scale: Desired maximum size for the longest side of the output video.
+        :param input_file_type: File type of the input video.
+        :param frame_rate: Desired frame rate of the output video.
+        :param duration: Desired duration of the output video.
+        :param crf: Constant Rate Factor for VP9 codec.
+        :return: None
+        """
         output_options = [
             '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
-            # '-pix_fmt', 'yuva420p',  # Pixel format
+            '-pix_fmt', 'yuva420p',  # Pixel format
             '-vf', f"scale={scale}:-1",  # Scaling
             '-an',  # No audio stream
             '-loop', '1',  # Loop the video
             '-deadline', 'realtime',  # Speed/quality tradeoff setting
-            '-b:v', '1M',  # Bitrate
+            '-b:v', '0',  # Bitrate
             '-v', 'error',  # Silence ffmpeg output
+            '-metadata:s:v:0', 'alpha_mode="1"',  # Set alpha mode to "1" (pre-multiplied alpha)
+            # '-auto-alt-ref', '0',  # Disable alt reference frames
         ]
-        if file_type == "webm":
+        if input_file_type == "webm":
             input_options = [
                 '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
             ]
@@ -422,7 +435,7 @@ class WebmHelper(object):
                 input_path=input_path,
                 output_path=output_path,
                 scale=scale,
-                file_type=file_type,
+                input_file_type=file_type,
                 frame_rate=frame_rate,
                 duration=duration
             )
@@ -442,7 +455,7 @@ class WebmHelper(object):
                     input_path=input_path,
                     output_path=adjusted_output_path,
                     scale=scale,
-                    file_type=file_type,
+                    input_file_type=file_type,
                     frame_rate=frame_rate,
                     duration=duration
                 )
@@ -455,7 +468,6 @@ class WebmHelper(object):
             optimized_webm = WebmHelper._optimize_webm(
                 optimized_webm,
                 scale=scale,
-                origin_file_type=file_type
             )
 
             # Ensure the size does not exceed 256 KB
