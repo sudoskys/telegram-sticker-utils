@@ -362,7 +362,7 @@ class WebmHelper(object):
         output_options = [
             '-c:v', 'libvpx-vp9',  # VP9 codec for WEBM
             '-pix_fmt', 'yuva420p',  # Pixel format
-            '-vf', f"scale={scale}:-1",  # Scaling
+            '-vf', f"scale='if(gt(iw,ih),{scale},-1)':'if(gt(iw,ih),-1,{scale})'",  # Scaling
             '-an',  # No audio stream
             '-loop', '1',  # Loop the video
             '-deadline', 'realtime',  # Speed/quality tradeoff setting
