@@ -36,7 +36,9 @@ pip3 install telegram-sticker-utils
 ```python
 from telegram_sticker_utils import ImageProcessor
 from telegram_sticker_utils import is_animated_gif
+from telegram_sticker_utils.core.const import add_emoji_rule
 
+add_emoji_rule("sad", "😢")
 print(is_animated_gif('test.gif'))  # Path to the image file or a file-like object.
 
 for sticker_file in ["happy.webp", "sad.png", "高兴.jpg", "悲伤.gif"]:

@@ -12,6 +12,19 @@ rule_file = Path(__file__).parent / "rules.json"
 EMOJI_RULES = json.loads(rule_file.read_text())
 
 
+def add_emoji_rule(rule: str, emoji_char: str):
+    """
+    添加一个emoji规则
+    :param rule: 规则
+    :param emoji_char: emoji字符
+    :raises ValueError: 如果生成的emoji不受支持
+    """
+    # 判断是否是 emoji
+    if not emoji.is_emoji(emoji_char):
+        raise ValueError(f"Emoji {emoji_char} is not supported")
+    EMOJI_RULES[rule] = emoji_char
+
+
 def get_random_emoji_from_text(text: str) -> str:
     """
     从给定的文本中提取字母并根据映射规则生成随机emoji。

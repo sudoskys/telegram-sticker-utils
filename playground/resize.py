@@ -3,6 +3,7 @@ import sys
 from loguru import logger
 
 from telegram_sticker_utils import ImageProcessor
+from telegram_sticker_utils.core.const import add_emoji_rule
 
 logger.remove(0)
 handler_id = logger.add(
@@ -14,6 +15,7 @@ handler_id = logger.add(
     enqueue=True,
     level="TRACE",
 )
+add_emoji_rule("sad", "😢")
 sticker = ImageProcessor.make_sticker(
     input_name='sad',
     input_data=open("st22.mp4", 'rb').read(),
