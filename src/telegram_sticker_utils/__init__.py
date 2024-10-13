@@ -242,7 +242,7 @@ class ImageProcessor(object):
         """
         input_data = ImageProcessor._read_input_data(input_data)
         file_type = mimetype_detector.identify_bytes(input_data).output.ct_label
-        if file_type == "webm":
+        if file_type in ["webm", "mp4", "mov", "avi"]:
             return ImageProcessor._process_animated_image(input_data, scale)
 
         if file_type in ["gif"]:
