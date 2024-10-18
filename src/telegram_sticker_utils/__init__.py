@@ -369,7 +369,7 @@ class WebmHelper(object):
             '-b:v', '0',  # Bitrate
             '-v', 'error',  # Silence ffmpeg output
             '-metadata:s:v:0', 'alpha_mode="1"',  # Set alpha mode to "1" (pre-multiplied alpha)
-            # '-auto-alt-ref', '0',  # Disable alt reference frames
+            '-auto-alt-ref', '0',  # Disable alt reference frames
         ]
         if input_file_type == "webm":
             input_options = [
