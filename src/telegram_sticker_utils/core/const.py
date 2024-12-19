@@ -11,7 +11,7 @@ USERNAME = "telegram"
 
 # 读取规则，本文件目录下的rules.json
 rule_file = Path(__file__).parent / "rules.json"
-EMOJI_RULES = json.loads(rule_file.read_text())
+EMOJI_RULES = json.loads(rule_file.read_text(encoding='utf-8'))
 
 
 def add_emoji_rule(rule: str, emoji_char: str):
