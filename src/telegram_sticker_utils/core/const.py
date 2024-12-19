@@ -52,7 +52,7 @@ def get_random_emoji_from_text(
     :return: 生成的emoji字符
     """
     if fallback_emoji is None:
-        fallback_emoji = emoji.emojize(":heart:")
+        fallback_emoji = '\N{HEAVY BLACK HEART}'
     emoji_candidates = []
     # 仅处理文本中下划线后的部分
     if "_" in text:
