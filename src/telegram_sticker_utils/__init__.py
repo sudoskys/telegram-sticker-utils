@@ -13,6 +13,8 @@ from ffmpy import FFmpeg
 from loguru import logger
 from magika import Magika
 from moviepy.video.io.VideoFileClip import VideoFileClip
+from wand.image import Image as WandImage
+from wand.api import library
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
 
@@ -165,12 +167,12 @@ class ImageProcessor(object):
             logger.warning(f"Unexpected output format: {output_format}")
 
         with w_image.Image(blob=input_data) as img:
-            original_width, original_height = img.width, img.height
+            current_w, current_h = img.width, img.height
 
             if new_height == -1:
-                new_height = int((new_width / original_width) * original_height)
+                new_height = int((new_width / current_w) * current_h)
             elif new_width == -1:
-                new_width = int((new_height / original_height) * original_width)
+                new_width = int((new_height / current_h) * current_w)
 
             img.resize(new_width, new_height)
             resized_image_data = img.make_blob(format=output_format)
@@ -301,7 +303,7 @@ class ImageProcessor(object):
         # Get random emoji from the input name
         emoji_item = [get_random_emoji_from_text(input_name)]
         # Output file extension
-        file_extension = "png" if sticker_type == "static" else "webm"
+        file_extension = "png" if sticker_type == StickerType.STATIC else "webm"
         return Sticker(
             data=sticker_data,
             file_extension=file_extension,

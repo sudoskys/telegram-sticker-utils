@@ -15,7 +15,7 @@ dependencies = [
     "magika>=0.5.1",
     "moviepy>=1.0.3",
 ]
-requires-python = ">=3.9,<3.13"
+requires-python = "<3.13,>=3.9"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 keywords = ["telegram", "sticker", "image", "video", "processing", "ffmpeg", "pillow"]
