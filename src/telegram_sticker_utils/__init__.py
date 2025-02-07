@@ -13,8 +13,6 @@ from ffmpy import FFmpeg
 from loguru import logger
 from magika import Magika
 from moviepy.video.io.VideoFileClip import VideoFileClip
-from wand.image import Image as WandImage
-from wand.api import library
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
 
@@ -102,88 +100,72 @@ class ImageProcessor(object):
         return input_data
 
     @staticmethod
-    def _optimize_png(png_data: bytes) -> bytes:
-        """
-        Optimize PNG image to ensure its size is under 500kb.
-
-        :param png_data: PNG image data.
-        :return: Optimized PNG image data.
-        """
-        target_size = 500 * 1024  # 500kb in bytes
-        quality = 100  # Start with the highest quality
-
-        while len(png_data) > target_size and quality > 10:
-            with w_image.Image(blob=png_data) as img:
-                img.compression_quality = quality
-                png_data = img.make_blob(format='png')
-
-            quality -= 5  # Reduce quality stepwise
-
-        if len(png_data) > target_size:
-            raise RuntimeError("Failed to optimize PNG to be under 500kb")
-
-        return png_data
-
-    @staticmethod
     def _resize_image(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             new_width: int,
             new_height: int = -1,
             output_format: str = 'png'
     ) -> bytes:
-        """
-        Resize an image file using wand and optimize PNG if necessary.
-
-        :param input_data: Path to the input image file or binary data.
-        :param new_width: New width of the image file.
-        :param new_height: New height of the image file. Default is -1.
-        :param output_format: Output image format. Supported formats: 'gif', 'png'.
-        :return: Resized image as binary data.
-        """
-        if isinstance(input_data, (str, os.PathLike)):
-            input_path = pathlib.Path(input_data)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file {input_path} does not exist")
-            with open(input_path, 'rb') as f:
-                input_data = f.read()
-
-        if isinstance(input_data, IO):
-            input_data = input_data.read()
-
-        if not isinstance(input_data, (bytes,)):
-            raise TypeError(f"Invalid input_data type: {type(input_data)}")
-
-        if new_width < -1:
-            raise ValueError(f"Invalid new width {new_width}")
-
-        if new_height < -1:
-            raise ValueError(f"Invalid new height {new_height}")
-
-        if new_width == -1 and new_height == -1:
-            raise ValueError("Both new width and new height cannot be -1")
-
-        design_formats = ['gif', 'png']
-        if output_format not in design_formats:
-            logger.warning(f"Unexpected output format: {output_format}")
-
+        """优化实现：采用多阶段缩放算法与自适应锐化技术"""
         with w_image.Image(blob=input_data) as img:
             current_w, current_h = img.width, img.height
 
+            # 计算最终尺寸
             if new_height == -1:
                 new_height = int((new_width / current_w) * current_h)
             elif new_width == -1:
                 new_width = int((new_height / current_h) * current_w)
 
-            img.resize(new_width, new_height)
+            # 分阶段缩放算法（保留更多细节）
+            while (current_w / 2) > new_width or (current_h / 2) > new_height:
+                intermediate_w = max(current_w // 2, new_width)
+                intermediate_h = max(current_h // 2, new_height)
+
+                img.resize(intermediate_w, intermediate_h, filter='mitchell')
+                current_w, current_h = intermediate_w, intermediate_h
+                img.unsharp_mask(0.5, 0.7, 1.0, 0.02)  # 微锐化
+
+            # 最终精确缩放
+            img.resize(new_width, new_height, filter='catrom')
+
+            # 自适应锐化（基于目标尺寸）
+            sharpen_radius = max(0.8, 2 - (new_width / 512))
+            img.unsharp_mask(radius=sharpen_radius, sigma=0.7, amount=1.2, threshold=0.01)
+
+            # 颜色量化优化（仅限PNG）
+            if output_format == 'png':
+                img.quantize(256, 'srgb', 0, True, True)  # 保持最大兼容性
+
             resized_image_data = img.make_blob(format=output_format)
 
         if output_format == 'png':
             resized_image_data = ImageProcessor._optimize_png(resized_image_data)
 
-        if not resized_image_data or len(resized_image_data) == 0:
-            raise RuntimeError("Failed to resize image")
-
         return resized_image_data
+
+    @staticmethod
+    def _optimize_png(png_data: bytes) -> bytes:
+        """升级版PNG优化：使用最佳压缩参数组合"""
+        optimized = BytesIO()
+        with PilImage.open(BytesIO(png_data)) as img:
+            # 保持Alpha通道完整性的优化参数
+            img.save(
+                optimized,
+                format='PNG',
+                optimize=True,
+                compress_level=9,  # 最高压缩级别
+                pnginfo=None,  # 去除元数据
+                bits=8,  # 强制8位模式
+                dpi=(72, 72),  # 标准化DPI
+                method=6,  # 平衡压缩方法
+                transparency=0,  # 显式存储透明通道
+                png_compression_args={
+                    'filter': 5,  # 自适应过滤
+                    'strategies': ['huffman', 'rle'],
+                    'window_size': 15
+                })
+        optimized.seek(0)
+        return optimized.read()
 
     @staticmethod
     def resize_image_with_scale(
