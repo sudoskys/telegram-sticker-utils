@@ -105,11 +105,11 @@ class ImageProcessor(object):
             target_size: int,
             output_format: str = 'png'
     ) -> bytes:
-        """针对数字插画的简单高质量缩放"""
+        """针对数字插画的高质量缩放,使用最温和的增强"""
         with w_image.Image(blob=input_data) as img:
-            # 计算目标尺寸
             current_w, current_h = img.width, img.height
 
+            # 保持宽高比计算新尺寸
             if current_w >= current_h:
                 new_width = target_size
                 new_height = int(round((target_size / current_w) * current_h))
@@ -117,22 +117,40 @@ class ImageProcessor(object):
                 new_height = target_size
                 new_width = int(round((target_size / current_h) * current_w))
 
-            # 缩放图像
-            img.resize(new_width, new_height, filter='lanczos')
-            img.unsharp_mask(0.5, 0.6, 0.9, 0.02)  # 轻微锐化
+            # 渐进式缩放
+            while (current_w / 1.5) > new_width or (current_h / 1.5) > new_height:
+                intermediate_w = max(int(current_w / 1.5), new_width)
+                intermediate_h = max(int(current_h / 1.5), new_height)
 
-            # 如果是PNG，进行基础的颜色优化
+                # 中间阶段使用高质量滤镜
+                img.resize(intermediate_w, intermediate_h, filter='lanczos2')
+                current_w, current_h = intermediate_w, intermediate_h
+
+                # 极轻微的锐化,仅用于补偿缩放造成的轻微模糊
+                if target_size <= 100:
+                    img.unsharp_mask(0.3, 0.3, 0.3, 0.05)
+
+            # 最终阶段缩放
+            if target_size <= 100:
+                # 小尺寸使用更精确的滤镜
+                img.resize(new_width, new_height, filter='lanczos2')
+                # 最小程度锐化
+                img.unsharp_mask(radius=0.3, sigma=0.3, amount=0.3, threshold=0.05)
+            else:
+                # 大尺寸
+                img.resize(new_width, new_height, filter='catrom')
+                # 512px基本不需要额外锐化
+
+            # 颜色优化
             if output_format == 'png':
-                img.quantize(256, 'srgb', dither=True)
+                img.quantize(256, 'srgb', 0, True, True)
 
             resized_image_data = img.make_blob(format=output_format)
-            if output_format == 'png' and len(resized_image_data) > 256 * 1024:
-                resized_image_data = ImageProcessor._optimize_png(resized_image_data)
 
-            if not resized_image_data or len(resized_image_data) == 0:
-                raise RuntimeError("Failed to resize image")
+        if output_format == 'png':
+            resized_image_data = ImageProcessor._optimize_png(resized_image_data)
 
-            return resized_image_data
+        return resized_image_data
 
     @staticmethod
     def _optimize_png(png_data: bytes) -> bytes:
@@ -146,10 +164,6 @@ class ImageProcessor(object):
                 optimize=True,
                 compress_level=9,
                 bits=8,
-                params={
-                    'filter_type': 4,  # Paeth
-                    'strategy': 3  # Z_RLE
-                }
             )
 
         output.seek(0)
