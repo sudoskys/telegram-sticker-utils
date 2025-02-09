@@ -125,7 +125,14 @@ class ImageProcessor(object):
             if output_format == 'png':
                 img.quantize(256, 'srgb', dither=True)
 
-            return img.make_blob(format=output_format)
+            resized_image_data = img.make_blob(format=output_format)
+            if output_format == 'png' and len(resized_image_data) > 256 * 1024:
+                resized_image_data = ImageProcessor._optimize_png(resized_image_data)
+
+            if not resized_image_data or len(resized_image_data) == 0:
+                raise RuntimeError("Failed to resize image")
+
+            return resized_image_data
 
     @staticmethod
     def _optimize_png(png_data: bytes) -> bytes:
