@@ -1,6 +1,6 @@
 [project]
 name = "telegram-sticker-utils"
-version = "0.2.19"
+version = "0.2.20"
 description = "easy and fast processing of telegram stickers"
 authors = [
     { name = "sudoskys", email = "coldlando@hotmail.com" },
