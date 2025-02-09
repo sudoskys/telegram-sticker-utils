@@ -100,78 +100,53 @@ class ImageProcessor(object):
         return input_data
 
     @staticmethod
-    def _resize_sticker(
+    def _resize_image(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
-            target_size: int = 512,
+            target_size: int,
             output_format: str = 'png'
     ) -> bytes:
-        """专为Sticker放大优化的算法 300->512"""
+        """针对数字插画的简单高质量缩放"""
         with w_image.Image(blob=input_data) as img:
-            original_w, original_h = img.width, img.height
+            # 计算目标尺寸
+            current_w, current_h = img.width, img.height
 
-            # 计算目标尺寸(保持最长边对齐)
-            if original_w >= original_h:
+            if current_w >= current_h:
                 new_width = target_size
-                new_height = int((target_size / original_w) * original_h)
+                new_height = int(round((target_size / current_w) * current_h))
             else:
                 new_height = target_size
-                new_width = int((target_size / original_h) * original_w)
+                new_width = int(round((target_size / current_h) * current_w))
 
-            # Sticker放大特殊优化
-            if original_w < new_width:  # 放大场景
-                # 1. 首次放大约1.4倍(420px左右)
-                intermediate_w = int(original_w * 1.4)
-                intermediate_h = int(original_h * 1.4)
-                img.resize(intermediate_w, intermediate_h, filter='mitchell')
-                img.unsharp_mask(0.5, 0.6, 0.9, 0.02)  # 轻微锐化
+            # 缩放图像
+            img.resize(new_width, new_height, filter='lanczos')
+            img.unsharp_mask(0.5, 0.6, 0.9, 0.02)  # 轻微锐化
 
-                # 2. 最终尺寸(使用Catrom确保平滑过渡)
-                img.resize(new_width, new_height, filter='catrom')
-                img.unsharp_mask(0.6, 0.7, 1.0, 0.02)  # 补充锐化
-            else:  # 缩小场景保持原有逻辑
-                while (original_w / 2) > new_width or (original_h / 2) > new_height:
-                    intermediate_w = max(original_w // 2, new_width)
-                    intermediate_h = max(original_h // 2, new_height)
-                    img.resize(intermediate_w, intermediate_h, filter='mitchell')
-                    original_w, original_h = intermediate_w, intermediate_h
-                    img.unsharp_mask(0.5, 0.7, 1.0, 0.02)
-
-                img.resize(new_width, new_height, filter='catrom')
-
-            # 优化颜色
+            # 如果是PNG，进行基础的颜色优化
             if output_format == 'png':
-                img.quantize(256, 'srgb', 0, True, True)
+                img.quantize(256, 'srgb', dither=True)
 
-            resized_data = img.make_blob(format=output_format)
-
-        # PNG
-        if output_format == 'png':
-            return ImageProcessor._optimize_sticker_png(resized_data)
-
-        return resized_data
+            return img.make_blob(format=output_format)
 
     @staticmethod
-    def _optimize_sticker_png(png_data: bytes) -> bytes:
-        """Sticker"""
-        optimized = BytesIO()
+    def _optimize_png(png_data: bytes) -> bytes:
+        """简化的PNG优化，专注于关键参数"""
+        output = BytesIO()
+
         with PilImage.open(BytesIO(png_data)) as img:
             img.save(
-                optimized,
+                output,
                 format='PNG',
                 optimize=True,
                 compress_level=9,
-                pnginfo=None,
                 bits=8,
-                dpi=(72, 72),
-                method=6,
-                transparency=0,
-                png_compression_args={
-                    'filter': 4,  # Paeth过滤器更适合Sticker
-                    'strategies': ['huffman_only'],  # 简化策略提高速度
-                    'window_size': 15
-                })
-        optimized.seek(0)
-        return optimized.read()
+                params={
+                    'filter_type': 4,  # Paeth
+                    'strategy': 3  # Z_RLE
+                }
+            )
+
+        output.seek(0)
+        return output.read()
 
     @staticmethod
     def resize_image_with_scale(
@@ -188,7 +163,7 @@ class ImageProcessor(object):
         :return: Resized image as binary data.
         """
         input_data = ImageProcessor._read_input_data(input_data)
-        return ImageProcessor._resize_sticker(input_data, scale, output_format)
+        return ImageProcessor._resize_image(input_data, scale, output_format)
 
     @staticmethod
     def _process_animated_image(input_data: bytes, scale: int) -> tuple[bytes, StickerType]:
