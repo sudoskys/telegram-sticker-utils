@@ -6,6 +6,8 @@ from enum import Enum
 from io import BytesIO
 from typing import Literal
 from typing import Union, IO
+import json
+import subprocess
 
 import wand.image as w_image
 from PIL import Image as PilImage
@@ -105,11 +107,18 @@ class ImageProcessor(object):
             target_size: int,
             output_format: str = 'png'
     ) -> bytes:
-        """针对数字插画的高质量缩放,使用最温和的增强"""
-        with w_image.Image(blob=input_data) as img:
-            current_w, current_h = img.width, img.height
-
-            # 保持宽高比计算新尺寸
+        """针对二次元风格图片的高质量缩放"""
+        # 提前导入，避免重复导入
+        from PIL.ImageEnhance import Sharpness
+        
+        input_buffer = BytesIO(input_data)
+        with PilImage.open(input_buffer) as img:
+            # 优化透明度处理
+            if img.mode not in ('RGBA', 'LA'):
+                img = img.convert('RGBA')
+            
+            # 计算新尺寸
+            current_w, current_h = img.size
             if current_w >= current_h:
                 new_width = target_size
                 new_height = int(round((target_size / current_w) * current_h))
@@ -117,55 +126,103 @@ class ImageProcessor(object):
                 new_height = target_size
                 new_width = int(round((target_size / current_h) * current_w))
 
-            # 渐进式缩放
-            while (current_w / 1.5) > new_width or (current_h / 1.5) > new_height:
-                intermediate_w = max(int(current_w / 1.5), new_width)
-                intermediate_h = max(int(current_h / 1.5), new_height)
-
-                # 中间阶段使用高质量滤镜
-                img.resize(intermediate_w, intermediate_h, filter='lanczos2')
-                current_w, current_h = intermediate_w, intermediate_h
-
-                # 极轻微的锐化,仅用于补偿缩放造成的轻微模糊
-                if target_size <= 100:
-                    img.unsharp_mask(0.3, 0.3, 0.3, 0.05)
-
-            # 最终阶段缩放
+            # 优化重采样策略
             if target_size <= 100:
-                # 小尺寸使用更精确的滤镜
-                img.resize(new_width, new_height, filter='lanczos2')
-                # 最小程度锐化
-                img.unsharp_mask(radius=0.3, sigma=0.3, amount=0.3, threshold=0.05)
+                # 小图优化：直接使用高质量重采样
+                resized = img.resize(
+                    (new_width, new_height),
+                    PilImage.Resampling.LANCZOS,
+                    reducing_gap=2.0,
+                    box=None  # 显式指定完整区域
+                )
+                # 更温和的锐化
+                resized = Sharpness(resized).enhance(1.2)
             else:
-                # 大尺寸
-                img.resize(new_width, new_height, filter='catrom')
-                # 512px基本不需要额外锐化
+                # 大图优化：渐进式重采样
+                current_size = img.size
+                steps = []
+                
+                # 计算渐进式缩放步骤
+                while (current_size[0] / 1.5 > new_width or 
+                       current_size[1] / 1.5 > new_height):
+                    current_size = (
+                        max(int(current_size[0] / 1.5), new_width),
+                        max(int(current_size[1] / 1.5), new_height)
+                    )
+                    steps.append(current_size)
+                
+                # 渐进式重采样
+                current = img
+                for size in steps:
+                    current = current.resize(
+                        size,
+                        PilImage.Resampling.BICUBIC,
+                        reducing_gap=3.0
+                    )
+                
+                # 最终重采样
+                resized = current.resize(
+                    (new_width, new_height),
+                    PilImage.Resampling.LANCZOS,
+                    reducing_gap=2.0
+                )
+                
+                # 根据缩放比例调整锐化程度
+                scale_ratio = min(new_width/img.size[0], new_height/img.size[1])
+                sharpen_amount = 1.1 if scale_ratio < 0.5 else 1.05
+                resized = Sharpness(resized).enhance(sharpen_amount)
 
-            # 颜色优化
-            if output_format == 'png':
-                img.quantize(256, 'srgb', 0, True, True)
-
-            resized_image_data = img.make_blob(format=output_format)
-
-        if output_format == 'png':
-            resized_image_data = ImageProcessor._optimize_png(resized_image_data)
-
-        return resized_image_data
+            # 优化输出质量
+            output = BytesIO()
+            save_params = {
+                'format': 'PNG',
+                'optimize': True,
+                'compress_level': 9,
+                'bits': 8,
+            }
+            
+            # 根据是否有透明通道优化保存参数
+            if resized.mode == 'RGBA' and not any(resized.getchannel('A').getdata()):
+                resized = resized.convert('RGB')
+            
+            resized.save(output, **save_params)
+            output.seek(0)
+            return output.read()
 
     @staticmethod
     def _optimize_png(png_data: bytes) -> bytes:
-        """简化的PNG优化，专注于关键参数"""
+        """优化PNG输出质量，主要用于后处理"""
         output = BytesIO()
-
+        
         with PilImage.open(BytesIO(png_data)) as img:
+            # 确保 RGBA 模式
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            
+            # 应用颜色量化，保持透明度
+            if img.mode == 'RGBA':
+                # 分离 alpha 通道
+                rgb = img.convert('RGB')
+                alpha = img.split()[3]
+                
+                # 对 RGB 通道进行量化
+                quantized = rgb.quantize(colors=256, method=2)  # method=2 使用中位切分算法
+                
+                # 重新组合 alpha 通道
+                quantized = quantized.convert('RGBA')
+                quantized.putalpha(alpha)
+                
+                img = quantized
+            
             img.save(
                 output,
                 format='PNG',
                 optimize=True,
                 compress_level=9,
-                bits=8,
+                quality=95,
+                bits=8
             )
-
+        
         output.seek(0)
         return output.read()
 
@@ -292,197 +349,144 @@ class WebmHelper(object):
     MAX_SIZE = 256 * 1024  # 256 KB
 
     @staticmethod
-    def _optimize_webm(webm_data: bytes, scale: int) -> bytes:
-        """优化 WEBM 编码的高级算法"""
-        if len(webm_data) <= WebmHelper.MAX_SIZE:
-            return webm_data
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            input_path = os.path.join(temp_dir, "input.webm")
-            output_path = os.path.join(temp_dir, "output.webm")
-
-            with open(input_path, 'wb') as f:
-                f.write(webm_data)
-
-            # 智能压缩参数序列
-            compression_profiles = [
-                # crf, deadline, cpu-used, tile-columns
-                (30, 'good', 1, 2),  # 高质量尝试
-                (38, 'good', 2, 2),  # 平衡模式
-                (45, 'realtime', 3, 1),  # 压缩模式
-                (52, 'realtime', 4, 1),  # 极限压缩
-            ]
-
-            for crf, deadline, cpu_used, tile_columns in compression_profiles:
-                output_options = [
-                    '-c:v', 'libvpx-vp9',
-                    '-pix_fmt', 'yuva420p',
-                    '-vf', f"scale='if(gt(iw,ih),{scale},-1)':'if(gt(iw,ih),-1,{scale})'",
-                    '-an',
-                    '-loop', '1',
-                    '-deadline', deadline,
-                    '-cpu-used', str(cpu_used),
-                    '-tile-columns', str(tile_columns),
-                    '-frame-parallel', '1',
-                    '-auto-alt-ref', '0',
-                    '-lag-in-frames', '0',
-                    '-b:v', '0',
-                    '-crf', str(crf),
-                    # 欺骗服务器的关键参数
-                    '-metadata:s:v:0', 'alpha_mode="1"',
-                    '-metadata', 'duration="2.9"',  # 伪装持续时间
-                    '-metadata', 'encoder="VP9 HW Encoder"'  # 伪装编码器
-                ]
-
-                try:
-                    ff = FFmpeg(
-                        global_options=['-y'],
-                        inputs={input_path: ['-c:v', 'libvpx-vp9']},
-                        outputs={output_path: output_options}
-                    )
-                    ff.run(quiet=True)
-
-                    with open(output_path, 'rb') as f:
-                        optimized_data = f.read()
-
-                    if len(optimized_data) <= WebmHelper.MAX_SIZE:
-                        return optimized_data
-
-                except Exception as e:
-                    logger.warning(f"Compression profile failed: {e}")
-                    continue
-
-        raise BadInput("Unable to optimize WEBM within size limit")
-
-    @staticmethod
-    def process_video(input_path, output_path, scale, input_file_type: str,
-                      frame_rate=None, duration=None, crf=None):
-        """改进的视频处理方法"""
-        output_options = [
-            '-c:v', 'libvpx-vp9',
-            '-pix_fmt', 'yuva420p',
-            '-vf', (f"scale='if(gt(iw,ih),{scale},-1)':'if(gt(iw,ih),-1,{scale})',"
-                    "setsar=1:1,fps=fps=24"),  # 统一帧率
-            '-an',
-            '-loop', '1',
-            '-deadline', 'good',
-            '-cpu-used', '2',
-            '-tile-columns', '2',
-            '-frame-parallel', '1',
-            '-lag-in-frames', '0',
-            '-b:v', '0',
-            '-v', 'error',
-            # 高级元数据控制
-            '-metadata:s:v:0', 'alpha_mode="1"',
-            '-metadata', 'duration="2.9"',
-            '-metadata', 'encoder="VP9 HW Encoder"',
-        ]
-
-        if frame_rate:
-            output_options.extend(['-r', str(min(frame_rate, 30))])
-
-        if duration:
-            # 智能时长控制
-            actual_duration = min(float(duration), 2.9)
-            output_options.extend(['-t', str(actual_duration)])
-
-        if crf:
-            output_options.extend(['-crf', str(crf)])
-
-        input_options = ['-c:v', 'libvpx-vp9'] if input_file_type == "webm" else []
-
-        ff = FFmpeg(
-            global_options=['-y'],
-            inputs={input_path: input_options},
-            outputs={output_path: output_options}
-        )
-        logger.trace(f"Calling ffmpeg command: {ff.cmd}")
-        ff.run()
-
-    @staticmethod
     def convert_to_webm_ffmpeg(
             input_data: Union[str, bytes, os.PathLike, IO[bytes]],
             scale: int,
             *,
             frame_rate: Union[int, None] = None,
-            duration: Union[int, None] = None
+            duration: Union[float, None] = None
     ) -> bytes:
-        """
-        Convert image or video data to optimized WEBM format, resizing as necessary.
-
-        :param input_data: Path to the input file or the input file data.
-        :param scale: Desired maximum size for the longest side of the output video.
-        :param frame_rate: Desired frame rate of the output video. If None, frame rate is not adjusted.
-        :param duration: Desired duration of the output video. If None, duration is not adjusted.
-        :return: Bytes of the optimized WEBM file.
-        :raises FileNotFoundError: If the input file does not exist.
-        :raises ValueError: If the encoded video exceeds 256 KB size limit.
-        """
+        """优化的动态贴纸转换"""
         try:
             file_type = mimetype_detector.identify_bytes(input_data).output.ct_label
         except Exception as exc:
             raise BadInput("Failed to infer file type") from exc
-        # Create a temporary directory to hold the files
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Save input data to a temporary file if it is not already a path
-            if isinstance(input_data, (str, os.PathLike)):
-                input_path = pathlib.Path(input_data)
-                if not input_path.exists():
-                    raise FileNotFoundError(f"Input file {input_path} does not exist")
-            else:
-                with tempfile.NamedTemporaryFile(dir=temp_dir, delete=False) as temp_input_file:
-                    temp_input_file.write(input_data)
-                    input_path = temp_input_file.name
+            # 准备输入文件
+            input_path = os.path.join(temp_dir, f"input.{file_type}")
+            with open(input_path, 'wb') as f:
+                f.write(input_data)
 
-            # Process video and optimize
-            output_path = os.path.join(temp_dir, "output_initial.webm")
-            WebmHelper.process_video(
-                input_path=input_path,
-                output_path=output_path,
-                scale=scale,
-                input_file_type=file_type,
-                frame_rate=frame_rate,
-                duration=duration
-            )
+            # 获取输入视频信息
+            probe_cmd = [
+                'ffprobe', '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height,r_frame_rate,duration',
+                '-of', 'json',
+                input_path
+            ]
+            try:
+                probe = subprocess.run(probe_cmd, capture_output=True, text=True)
+                video_info = json.loads(probe.stdout)['streams'][0]
+                
+                # 计算原始帧率
+                fps_num, fps_den = map(int, video_info.get('r_frame_rate', '24/1').split('/'))
+                original_fps = fps_num / fps_den
+                
+                # 智能帧率控制
+                target_fps = min(original_fps, 30)
+                if frame_rate:
+                    target_fps = min(frame_rate, 30)
+                
+                # 智能时长控制
+                orig_duration = float(video_info.get('duration', '3'))
+                target_duration = min(orig_duration, 2.9)
+                if duration:
+                    target_duration = min(duration, 2.9)
+            except Exception as e:
+                logger.warning(f"Failed to get video info: {e}, using default values")
+                target_fps = 24
+                target_duration = 2.9
 
-            with open(output_path, 'rb') as output_file:
-                optimized_webm = output_file.read()
+            output_path = os.path.join(temp_dir, "output.webm")
+            
+            # 基础编码参数
+            base_options = [
+                # 视频编码器设置
+                '-c:v', 'libvpx-vp9',
+                '-pix_fmt', 'yuva420p',
+                # 尺寸控制
+                '-vf', f"scale='min({scale},iw)':'-2':flags=lanczos,setsar=1:1",
+                # 移除音频
+                '-an',
+                # 循环设置
+                '-loop', '0',
+                # 质量控制
+                '-deadline', 'good',
+                '-cpu-used', '2',
+                # 并行处理
+                '-tile-columns', '2',
+                '-frame-parallel', '1',
+                '-auto-alt-ref', '1',
+                '-lag-in-frames', '16',
+                # 比特率控制
+                '-b:v', '0',
+                '-crf', '30',
+                # 速度控制
+                '-speed', '2',
+                # 帧率控制
+                '-r', f'{target_fps}',
+                # 时长控制
+                '-t', f'{target_duration}',
+                # 元数据（用于欺骗服务器）
+                '-metadata:s:v:0', 'alpha_mode="1"',
+                '-metadata', f'duration="{target_duration}"',
+                '-metadata', 'encoder="VP9 HW Encoder"',
+                # 错误处理
+                '-v', 'error'
+            ]
 
-            # Validate and adjust properties if needed
-            video = VideoFileClip(output_path)
-
-            if video.fps > 30 or video.duration > 3:
-                adjusted_output_path = os.path.join(temp_dir, "output_adjusted.webm")
-                frame_rate = 24 if video.fps > 30 else frame_rate
-                duration = 2 if video.duration > 3 else duration
-                logger.trace("Reprocessing video to fit requirements")
-                WebmHelper.process_video(
-                    input_path=input_path,
-                    output_path=adjusted_output_path,
-                    scale=scale,
-                    input_file_type=file_type,
-                    frame_rate=frame_rate,
-                    duration=duration
+            try:
+                # 第一次编码尝试
+                ff = FFmpeg(
+                    global_options=['-y', '-hide_banner'],
+                    inputs={input_path: None},
+                    outputs={output_path: base_options}
                 )
-                if not os.path.exists(adjusted_output_path):
-                    raise FileNotFoundError("Failed to create adjusted video")
-                with open(adjusted_output_path, 'rb') as output_file:
-                    optimized_webm = output_file.read()
+                ff.run()
 
-            # Optimize the WEBM file to be under 256 KB
-            optimized_webm = WebmHelper._optimize_webm(
-                optimized_webm,
-                scale=scale,
-            )
+                # 检查文件大小并优化
+                if os.path.getsize(output_path) > WebmHelper.MAX_SIZE:
+                    # 压缩配置序列
+                    compression_configs = [
+                        {'crf': 35, 'cpu-used': 2, 'speed': 2},
+                        {'crf': 40, 'cpu-used': 3, 'speed': 3},
+                        {'crf': 45, 'cpu-used': 4, 'speed': 4},
+                        {'crf': 50, 'deadline': 'realtime', 'cpu-used': 4, 'speed': 4}
+                    ]
 
-            # Ensure the size does not exceed 256 KB
-            if len(optimized_webm) > 256 * 1024:
-                raise BadInput(
-                    "Encoded video exceeds 256 KB size limit when using ffmpeg, "
-                    "but Telegram thinks it's too big! "
-                    "Please check this file"
-                )
-            return optimized_webm
+                    for config in compression_configs:
+                        try:
+                            options = base_options.copy()
+                            # 更新压缩参数
+                            for param, value in config.items():
+                                param_index = options.index(f'-{param}') + 1
+                                options[param_index] = str(value)
+                            
+                            temp_output = os.path.join(temp_dir, "output_compressed.webm")
+                            ff = FFmpeg(
+                                global_options=['-y', '-hide_banner'],
+                                inputs={input_path: None},
+                                outputs={temp_output: options}
+                            )
+                            ff.run()
+
+                            if os.path.getsize(temp_output) <= WebmHelper.MAX_SIZE:
+                                with open(temp_output, 'rb') as f:
+                                    return f.read()
+                        except Exception as e:
+                            logger.warning(f"Compression config {config} failed: {e}")
+                            continue
+
+                    raise BadInput("Failed to compress animated sticker within size limit")
+
+                with open(output_path, 'rb') as f:
+                    return f.read()
+                    
+            except Exception as e:
+                logger.error(f"FFmpeg processing failed: {e}")
+                raise BadInput(f"Video processing failed: {e}") from e
 
     @staticmethod
     def convert_to_webm_wand(
