@@ -14,7 +14,6 @@ from PIL import Image as PilImage
 from ffmpy import FFmpeg
 from loguru import logger
 from magika import Magika
-from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from telegram_sticker_utils.core.const import get_random_emoji_from_text
 
@@ -117,7 +116,7 @@ class ImageProcessor(object):
             if img.mode not in ('RGBA', 'LA'):
                 img = img.convert('RGBA')
             
-            # 计算新尺寸
+            # 计算新尺寸，确保最长边等于target_size
             current_w, current_h = img.size
             if current_w >= current_h:
                 new_width = target_size
@@ -394,20 +393,31 @@ class WebmHelper(object):
                 target_duration = min(orig_duration, 2.9)
                 if duration:
                     target_duration = min(duration, 2.9)
+                    
+                # 获取原始尺寸
+                width = int(video_info.get('width', 512))
+                height = int(video_info.get('height', 512))
             except Exception as e:
                 logger.warning(f"Failed to get video info: {e}, using default values")
                 target_fps = 24
                 target_duration = 2.9
+                width = height = 512
 
             output_path = os.path.join(temp_dir, "output.webm")
+            
+            # 计算缩放参数，确保最长边等于scale
+            if width >= height:
+                scale_filter = f"scale={scale}:-2:flags=lanczos"
+            else:
+                scale_filter = f"scale=-2:{scale}:flags=lanczos"
             
             # 基础编码参数
             base_options = [
                 # 视频编码器设置
                 '-c:v', 'libvpx-vp9',
                 '-pix_fmt', 'yuva420p',
-                # 尺寸控制
-                '-vf', f"scale='min({scale},iw)':'-2':flags=lanczos,setsar=1:1",
+                # 尺寸控制 - 修正为确保最长边是scale
+                '-vf', f"{scale_filter},setsar=1:1",
                 # 移除音频
                 '-an',
                 # 循环设置
@@ -497,8 +507,7 @@ class WebmHelper(object):
     ) -> bytes:
         """
         Convert image or video data to optimized WEBM format, resizing as necessary.
-        !!!Warning: This method may cause the GIF size to be distorted!!!
-
+        
         :param input_data: Path to the input file or the input file data.
         :param scale: Desired maximum size for the longest side of the output video.
         :param strict: Some images may have wrong metadata, set this to True to fall back to ffmpeg.
@@ -515,7 +524,7 @@ class WebmHelper(object):
                 input_data = file.read()
 
         with w_image.Image(blob=input_data) as img:
-            # Compute the new size while maintaining aspect ratio
+            # 计算新尺寸，确保最长边等于scale
             if img.width > img.height:
                 new_width = scale
                 new_height = int(img.height * (scale / img.width))
@@ -535,16 +544,20 @@ class WebmHelper(object):
                         # Use ffmpeg for conversion if dimensions do not match
                         return WebmHelper.convert_to_webm_ffmpeg(input_data, scale)
                     raise ValueError(f"Image dimensions unknown error occurred")
-            # Resize image/video
-            img.transform(resize=f"{new_width}x{new_height}!")
-            # Apply the optimizations
-            # img.color_fuzz = "10%"
-            # img.optimize_transparency()
+                    
+            # 使用高质量重采样方法
+            img.resize(new_width, new_height, filter='lanczos')
+            
+            # 应用轻微锐化以提高清晰度
+            img.sharpen(radius=0, sigma=0.8)
 
-            # Convert to WEBM with quality optimizations
-            # img.options['webm:lossy'] = 'true'  # Use lossy compression for smaller size
-            img.options['webm:method'] = '6'  # Method 6 provides good quality and compression
-
+            # 优化透明度
+            img.alpha_channel = True
+            
+            # 转换为WebM并设置高质量参数
+            img.options['webm:method'] = '6'  # 高质量压缩方法
+            img.options['webm:thread-level'] = '2'  # 并行处理
+            
             if img.width != new_width or img.height != new_height:
                 raise ValueError(f"Sticker Dimensions changed after optimization {img.width}x{img.height}")
 
