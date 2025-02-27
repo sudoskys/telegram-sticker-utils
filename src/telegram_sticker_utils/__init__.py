@@ -355,7 +355,21 @@ class WebmHelper(object):
             frame_rate: Union[int, None] = None,
             duration: Union[float, None] = None
     ) -> bytes:
-        """优化的动态贴纸转换"""
+        """
+        将输入数据转换为优化的WebM格式动态贴纸。
+        
+        参数:
+            input_data: 输入文件路径或二进制数据
+            scale: 输出视频最长边的目标尺寸
+            frame_rate: 可选的目标帧率，默认为原始帧率（最高30fps）
+            duration: 可选的目标时长，默认为原始时长（最长2.9秒）
+            
+        返回:
+            bytes: 优化后的WebM格式数据
+            
+        异常:
+            BadInput: 当文件类型推断失败或视频处理失败时
+        """
         try:
             file_type = mimetype_detector.identify_bytes(input_data).output.ct_label
         except Exception as exc:
@@ -376,11 +390,17 @@ class WebmHelper(object):
                 input_path
             ]
             try:
-                probe = subprocess.run(probe_cmd, capture_output=True, text=True)
-                video_info = json.loads(probe.stdout)['streams'][0]
+                probe = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+                video_info = json.loads(probe.stdout)
+                
+                # 确保streams存在且不为空
+                if 'streams' not in video_info or not video_info['streams']:
+                    raise ValueError("No video streams found in the input file")
+                    
+                stream_info = video_info['streams'][0]
                 
                 # 计算原始帧率
-                fps_num, fps_den = map(int, video_info.get('r_frame_rate', '24/1').split('/'))
+                fps_num, fps_den = map(int, stream_info.get('r_frame_rate', '24/1').split('/'))
                 original_fps = fps_num / fps_den
                 
                 # 智能帧率控制
@@ -389,15 +409,15 @@ class WebmHelper(object):
                     target_fps = min(frame_rate, 30)
                 
                 # 智能时长控制
-                orig_duration = float(video_info.get('duration', '3'))
+                orig_duration = float(stream_info.get('duration', '3'))
                 target_duration = min(orig_duration, 2.9)
                 if duration:
                     target_duration = min(duration, 2.9)
                     
                 # 获取原始尺寸
-                width = int(video_info.get('width', 512))
-                height = int(video_info.get('height', 512))
-            except Exception as e:
+                width = int(stream_info.get('width', 512))
+                height = int(stream_info.get('height', 512))
+            except (subprocess.SubprocessError, json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.warning(f"Failed to get video info: {e}, using default values")
                 target_fps = 24
                 target_duration = 2.9
@@ -466,15 +486,19 @@ class WebmHelper(object):
                         {'crf': 50, 'deadline': 'realtime', 'cpu-used': 4, 'speed': 4}
                     ]
 
-                    for config in compression_configs:
+                    for i, config in enumerate(compression_configs):
                         try:
                             options = base_options.copy()
                             # 更新压缩参数
                             for param, value in config.items():
-                                param_index = options.index(f'-{param}') + 1
-                                options[param_index] = str(value)
+                                if f'-{param}' in options:
+                                    param_index = options.index(f'-{param}') + 1
+                                    options[param_index] = str(value)
+                                else:
+                                    # 如果参数不存在，添加它
+                                    options.extend([f'-{param}', str(value)])
                             
-                            temp_output = os.path.join(temp_dir, "output_compressed.webm")
+                            temp_output = os.path.join(temp_dir, f"output_compressed_{i}.webm")
                             ff = FFmpeg(
                                 global_options=['-y', '-hide_banner'],
                                 inputs={input_path: None},
@@ -489,6 +513,12 @@ class WebmHelper(object):
                             logger.warning(f"Compression config {config} failed: {e}")
                             continue
 
+                    # 如果所有压缩配置都失败，但原始输出文件存在，返回它
+                    if os.path.exists(output_path) and os.path.getsize(output_path) <= WebmHelper.MAX_SIZE:
+                        logger.warning("Using original output as all compression attempts failed")
+                        with open(output_path, 'rb') as f:
+                            return f.read()
+                            
                     raise BadInput("Failed to compress animated sticker within size limit")
 
                 with open(output_path, 'rb') as f:
@@ -543,7 +573,7 @@ class WebmHelper(object):
                     if strict:
                         # Use ffmpeg for conversion if dimensions do not match
                         return WebmHelper.convert_to_webm_ffmpeg(input_data, scale)
-                    raise ValueError(f"Image dimensions unknown error occurred")
+                    raise ValueError("Image dimensions unknown error occurred")
                     
             # 使用高质量重采样方法
             img.resize(new_width, new_height, filter='lanczos')
