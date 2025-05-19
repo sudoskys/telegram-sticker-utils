@@ -160,3 +160,5 @@ cython_debug/
 #.idea/
 /.pdm-python
 /src/telegram_sticker_utils/core/rules_sorted.json
+
+.idea/

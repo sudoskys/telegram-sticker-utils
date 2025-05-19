@@ -84,6 +84,7 @@ def is_animated_gif(
 
 
 class ImageProcessor(object):
+    MAX_STATIC_IMAGE_SIZE_BYTES = 500 * 1024  # 500 KB
 
     @staticmethod
     def _read_input_data(input_data: Union[str, bytes, os.PathLike, IO[bytes]]) -> bytes:
@@ -185,8 +186,19 @@ class ImageProcessor(object):
                 resized = resized.convert('RGB')
             
             resized.save(output, **save_params)
-            output.seek(0)
-            return output.read()
+            initial_output_data = output.getvalue()
+            if len(initial_output_data) > ImageProcessor.MAX_STATIC_IMAGE_SIZE_BYTES:
+                optimized_data = ImageProcessor._optimize_png(initial_output_data)
+                
+                if len(optimized_data) > ImageProcessor.MAX_STATIC_IMAGE_SIZE_BYTES:
+                     logger.warning(
+                        f"Optimized image size is still too large: {len(optimized_data) / 1024:.2f}KB "
+                        f"(limit: {ImageProcessor.MAX_STATIC_IMAGE_SIZE_BYTES / 1024:.2f}KB)."
+                    )
+                return optimized_data
+            
+            # 如果初始大小在限制内，直接返回
+            return initial_output_data
 
     @staticmethod
     def _optimize_png(png_data: bytes) -> bytes:
